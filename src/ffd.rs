@@ -9,12 +9,12 @@ use fork::{daemon, Fork};
 use tokio::{
     fs::{read_dir, OpenOptions},
     io::AsyncReadExt,
-    net::{TcpListener, TcpStream, ToSocketAddrs},
+    net::{TcpListener, TcpStream},
 };
 
 mod proto;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let matches = App::new("ffd")
         .version("v0.1.0")
@@ -23,12 +23,13 @@ async fn main() {
             Arg::with_name("daemon")
                 .short("d")
                 .long("daemon")
-                .takes_value(false),
+                .takes_value(false)
+                .help("detach the process from the terminal"),
             Arg::with_name("buffer-size")
                 .short("b")
                 .long("buffer-size")
                 .default_value("4096")
-                .help("sets the size of the buffer used for handling file transfer transactions"),
+                .help("sets the size of the buffer allocated to each file transfer transaction"),
             Arg::with_name("addr")
                 .takes_value(true)
                 .required(true)
@@ -47,35 +48,51 @@ async fn main() {
         .expect("a valid buffer size is required");
     let directory_path: PathBuf = matches.value_of("directory").unwrap().into();
 
+    if !directory_path.exists() || !directory_path.is_dir() {
+        eprintln!("Path must be to a directory");
+        exit(1)
+    }
+
+    let mut base_path: PathBuf = directory_path.clone();
+    base_path.pop();
+
     if matches.is_present("daemon") {
         if let Ok(Fork::Child) = daemon(false, false) {
-            server(addr, directory_path, buffer_size).await;
+            let tcp = TcpListener::bind(addr).await.unwrap();
+
+            loop {
+                if let Ok((stream, _)) = tcp.accept().await {
+                    tokio::spawn(handle_conn(stream, base_path.clone(), buffer_size));
+                }
+            }
         }
     } else {
-        server(addr, directory_path, buffer_size).await;
-    }
-}
+        let tcp = TcpListener::bind(addr).await.unwrap();
 
-async fn server<A: ToSocketAddrs>(addr: A, serve_dir: PathBuf, buffer_size: usize) {
-    let tcp = TcpListener::bind(addr).await.unwrap();
-
-    loop {
-        if let Ok((stream, _)) = tcp.accept().await {
-            tokio::spawn(handle_conn(stream, serve_dir.clone(), buffer_size));
+        loop {
+            if let Ok((stream, _)) = tcp.accept().await {
+                tokio::spawn(handle_conn(stream, base_path.clone(), buffer_size));
+            }
         }
     }
 }
 
-async fn handle_conn(mut stream: TcpStream, serve_dir: PathBuf, buffer_size: usize) {
+async fn handle_conn(mut stream: TcpStream, mut base_path: PathBuf, buffer_size: usize) {
     match proto::Message::recv(&mut stream).await {
         Ok(proto::Message::List) => {
-            let mut dir = read_dir(&serve_dir).await.unwrap();
+            let mut dir = read_dir(&base_path).await.unwrap();
 
             let mut dir_info = vec![];
             while let Ok(Some(entry)) = dir.next_entry().await {
                 let meta = entry.metadata().await.unwrap();
                 dir_info.push(proto::FileData {
-                    path: entry.path().to_str().unwrap().to_string(),
+                    path: entry
+                        .path()
+                        .strip_prefix(&base_path)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string(),
                     created: meta.created().unwrap().elapsed().unwrap(),
                     size: meta.len(),
                 });
@@ -86,12 +103,27 @@ async fn handle_conn(mut stream: TcpStream, serve_dir: PathBuf, buffer_size: usi
                 exit(1)
             }
         }
-        Ok(proto::Message::Download { path }) => {
-            let mut file = match OpenOptions::new().read(true).write(false).open(path).await {
+        Ok(proto::Message::Download { path: dl_path }) => {
+            base_path.push(dl_path);
+
+            if !base_path.exists() {
+                if let Err(e) = proto::Message::NotAllowed.send(&mut stream).await {
+                    eprintln!("{}", e);
+                    return;
+                }
+                return;
+            }
+
+            let mut file = match OpenOptions::new()
+                .read(true)
+                .write(false)
+                .open(base_path)
+                .await
+            {
                 Ok(f) => f,
                 Err(e) => {
                     eprintln!("{}", e);
-                    return
+                    return;
                 }
             };
 
@@ -110,7 +142,7 @@ async fn handle_conn(mut stream: TcpStream, serve_dir: PathBuf, buffer_size: usi
                 .await
                 {
                     eprintln!("{}", e);
-                    exit(1)
+                    return;
                 }
 
                 part += 1;

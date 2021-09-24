@@ -6,12 +6,15 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Debug)]
+/// Types of communication errors that can occur.
 pub enum Error {
     IO(io::Error),
     Serialization(bincode::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(u8)]
+/// Message types exchanged between clients and servers.
 pub enum Message {
     /// List what's available.
     List,
@@ -24,9 +27,13 @@ pub enum Message {
 
     /// Writing a file part.
     Part { num: u64, end: bool, data: Vec<u8> },
+
+    /// Operation is not permitted.
+    NotAllowed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Simple representation of a file on the server.
 pub struct FileData {
     /// Path of the file on the server.
     pub path: String,
