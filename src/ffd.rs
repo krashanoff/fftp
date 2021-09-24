@@ -53,25 +53,25 @@ async fn main() {
         exit(1)
     }
 
-    let mut base_path: PathBuf = directory_path.clone();
-    base_path.pop();
-
     if matches.is_present("daemon") {
         if let Ok(Fork::Child) = daemon(false, false) {
             let tcp = TcpListener::bind(addr).await.unwrap();
 
             loop {
                 if let Ok((stream, _)) = tcp.accept().await {
-                    tokio::spawn(handle_conn(stream, base_path.clone(), buffer_size));
+                    tokio::spawn(handle_conn(stream, directory_path.clone(), buffer_size));
                 }
             }
+        } else {
+            eprintln!("Failed");
+            exit(1)
         }
     } else {
         let tcp = TcpListener::bind(addr).await.unwrap();
 
         loop {
             if let Ok((stream, _)) = tcp.accept().await {
-                tokio::spawn(handle_conn(stream, base_path.clone(), buffer_size));
+                tokio::spawn(handle_conn(stream, directory_path.clone(), buffer_size));
             }
         }
     }

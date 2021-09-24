@@ -1,6 +1,6 @@
 [package]
 name = "ff"
-description = "Fast File client and server"
+description = "In-network file transfer."
 version = "0.1.0"
 authors = ["krashanoff <leo@krashanoff.com>"]
 edition = "2018"
