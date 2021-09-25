@@ -6,6 +6,7 @@ use std::{path::PathBuf, process::exit};
 
 use clap::{App, Arg};
 use fork::{daemon, Fork};
+use proto::*;
 use tokio::{
     fs::{read_dir, OpenOptions},
     io::AsyncReadExt,
@@ -53,63 +54,34 @@ async fn main() {
         exit(1)
     }
 
-    if matches.is_present("daemon") {
-        if let Ok(Fork::Child) = daemon(false, false) {
-            let tcp = TcpListener::bind(addr).await.unwrap();
+    let transport = proto::Transport::bind(8080).await;
+    let (mut client, handle) = transport.start_server().await;
 
-            loop {
-                if let Ok((stream, _)) = tcp.accept().await {
-                    tokio::spawn(handle_conn(stream, directory_path.clone(), buffer_size));
-                }
-            }
-        } else {
-            eprintln!("Failed");
-            exit(1)
-        }
-    } else {
-        let tcp = TcpListener::bind(addr).await.unwrap();
-
-        loop {
-            if let Ok((stream, _)) = tcp.accept().await {
-                tokio::spawn(handle_conn(stream, directory_path.clone(), buffer_size));
-            }
+    loop {
+        if let Some(req) = client.recv().await {
+            run_server(req, &mut client, directory_path.clone()).await;
         }
     }
 }
 
-async fn handle_conn(mut stream: TcpStream, mut base_path: PathBuf, buffer_size: usize) {
-    match proto::Message::recv(&mut stream).await {
-        Ok(proto::Message::List) => {
-            let mut dir = read_dir(&base_path).await.unwrap();
-
-            let mut dir_info = vec![];
-            while let Ok(Some(entry)) = dir.next_entry().await {
-                let meta = entry.metadata().await.unwrap();
-                dir_info.push(proto::FileData {
-                    path: entry
-                        .path()
-                        .strip_prefix(&base_path)
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string(),
-                    created: meta.created().unwrap().elapsed().unwrap(),
-                    size: meta.len(),
-                });
-            }
-
-            if let Err(e) = proto::Message::Directory(dir_info).send(&mut stream).await {
+async fn run_server(req: Request, client: &mut Listener, directory_path: PathBuf) {
+    match req {
+        proto::Request::List => {
+            if let Err(e) = client
+                .send(Response::Directory(dir_data(directory_path.clone()).await))
+                .await
+            {
                 eprintln!("{}", e);
                 exit(1)
             }
         }
-        Ok(proto::Message::Download { path: dl_path }) => {
-            base_path.push(dl_path);
+        proto::Request::Download { path } => {
+            let mut base_path = directory_path.clone();
+            base_path.push(path);
 
             if !base_path.exists() {
-                if let Err(e) = proto::Message::NotAllowed.send(&mut stream).await {
+                if let Err(e) = client.send(Response::NotAllowed).await {
                     eprintln!("{}", e);
-                    return;
                 }
                 return;
             }
@@ -127,19 +99,19 @@ async fn handle_conn(mut stream: TcpStream, mut base_path: PathBuf, buffer_size:
                 }
             };
 
-            let mut part = 0u64;
-            let mut buf = vec![0; buffer_size];
+            let mut part = 0u32;
+            let mut buf = vec![0; client.preferred_chunk_size()];
 
             while let Ok(size) = file.read(&mut buf).await {
                 let end = size == 0;
 
-                if let Err(e) = (proto::Message::Part {
-                    num: part,
-                    end: size == 0,
-                    data: buf[..size].to_vec(),
-                })
-                .send(&mut stream)
-                .await
+                if let Err(e) = client
+                    .send(Response::Part {
+                        num: part,
+                        last: size == 0,
+                        data: buf[..size].to_vec(),
+                    })
+                    .await
                 {
                     eprintln!("{}", e);
                     return;
@@ -152,8 +124,26 @@ async fn handle_conn(mut stream: TcpStream, mut base_path: PathBuf, buffer_size:
                 }
             }
         }
-        _ => {
-            return;
-        }
+        proto::Request::DownloadPart { .. } => {}
     }
+}
+
+async fn dir_data(base_path: PathBuf) -> Vec<proto::FileData> {
+    let mut dir = read_dir(&base_path).await.unwrap();
+    let mut dir_info = vec![];
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let meta = entry.metadata().await.unwrap();
+        dir_info.push(proto::FileData {
+            path: entry
+                .path()
+                .strip_prefix(&base_path)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string(),
+            created: meta.created().unwrap().elapsed().unwrap(),
+            size: meta.len(),
+        });
+    }
+    dir_info
 }
