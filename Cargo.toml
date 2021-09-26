@@ -1,5 +1,5 @@
 [package]
-name = "ff"
+name = "fftp"
 description = "In-network file transfer."
 version = "0.1.0"
 authors = ["krashanoff <leo@krashanoff.com>"]

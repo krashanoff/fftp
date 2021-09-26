@@ -59,7 +59,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ff"
+name = "fftp"
 version = "0.1.0"
 dependencies = [
  "bincode",

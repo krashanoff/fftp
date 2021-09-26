@@ -1,11 +1,17 @@
-# ff
+# fftp
 
-`ff` is the "Fast File" client and server. It transfers files quickly and securely
-between computers on a network with low overhead.
+`fftp` is the "Fast File Transport Protocol". It transfers files quickly between
+computers on a network with low overhead.
+
+## Motivation
 
 FTP uses two ports which makes it inconvenient to reverse proxy. HTTP file servers
-might be too bulky for certain things, and they aren't as fast as FTP. This is my
-duct tape and chicken wire compromise.
+might be too bulky for certain things, and they aren't as fast as FTP. Both use TCP.
+This is my duct tape and chicken wire compromise.
+
+## Use
+
+The client is `ff`. The server is `ffd`.
 
 ```sh
 # Create a file.
@@ -15,7 +21,7 @@ echo "hi" > test/test.txt
 # Start running a server.
 ffd -d localhost:8080 test
 
-# List files available to download.
+# List files available.
 ff localhost:8080 ls
 
 # Download a file.
@@ -26,7 +32,3 @@ ff localhost:8080 get test.txt
 * Minimal communication overhead
 * Fast
 * Maintainable
-
-## Features
-- [ ] UDP
-- [ ] Encrypted

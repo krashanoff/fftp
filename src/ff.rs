@@ -3,13 +3,12 @@
 //! The Fast File client.
 
 use clap::{App, Arg, SubCommand};
-use igd::aio;
 use tokio::{
     io::{stdout, AsyncWriteExt},
-    net::{TcpStream, UdpSocket},
+    time::{timeout, Duration},
 };
 
-use std::{path::PathBuf, process::exit, time::Duration};
+use std::{path::PathBuf, process::exit};
 
 mod proto;
 
@@ -28,22 +27,20 @@ async fn main() {
             SubCommand::with_name("get")
                 .args(&[Arg::with_name("path")
                     .required(true)
-                    .help("Path of the file to download")])
+                    .multiple(true)
+                    .help("Path(s) of the file(s) to download")])
                 .about("Download a file"),
         )
         .get_matches();
 
     // Create our transport.
     let transport = Transport::bind(0).await;
-    let (mut client, handle) = transport
+    let (mut client, _handle) = transport
         .start_client(matches.value_of("addr").unwrap())
         .await;
 
     if let Some(_) = matches.subcommand_matches("ls") {
-        client.send(Request::List).await;
-        println!("Sent list request");
-
-        match client.recv().await {
+        match send_recv_ad_nauseum(&mut client, Request::List, Duration::from_secs(3)).await {
             Some(Response::Directory(files)) => {
                 println!("{:<20} | {:<20} | {:<20}", "Path", "Created", "Size");
                 println!("{}", "-".repeat(66));
@@ -60,28 +57,64 @@ async fn main() {
             Some(Response::NotAllowed) => {
                 eprintln!("Not allowed");
             }
-            _ => {}
+            None => {
+                eprintln!("Missing response");
+                exit(1)
+            }
+            _ => {
+                eprintln!("Wrong response");
+                exit(1)
+            }
         }
-        exit(1)
+        exit(0)
     }
     if let Some(matches) = matches.subcommand_matches("get") {
-        let path = PathBuf::from(matches.value_of("path").unwrap());
-
-        if let Err(e) = client
-            .send(Request::Download {
-                path: path.to_str().unwrap().to_string(),
-            })
-            .await
-        {
-            eprintln!("{}", e);
-            exit(1)
-        }
-
+        let paths = matches.values_of("path").unwrap().map(PathBuf::from);
         let mut stdout = stdout();
-        let mut pieces = vec![];
-        loop {
-            while let Some(Response::Part { last, data, num }) = client.recv().await {
-                pieces.push(Response::Part { last, data, num });
+
+        for path in paths {
+            if let Err(e) = client
+                .send(Request::Download {
+                    path: path.to_str().unwrap().to_string(),
+                })
+                .await
+            {
+                eprintln!("{}", e);
+                exit(1)
+            }
+
+            let mut file = vec![];
+            while let Some(Response::Part {
+                last: false,
+                data,
+                start_byte,
+            }) = client.recv().await
+            {
+                eprintln!("Received {} bytes starting at {}", &data.len(), &start_byte);
+                data.iter().cloned().fold(0, |acc, byte| {
+                    file.insert(start_byte as usize + acc, byte);
+                    acc + 1
+                });
+            }
+            stdout.write_all(file.as_slice()).await.unwrap();
+        }
+    }
+}
+
+/// Send a packet at the given interval until a response is received.
+async fn send_recv_ad_nauseum(
+    client: &mut Client,
+    msg: Request,
+    duration: Duration,
+) -> Option<Response> {
+    loop {
+        client.send(msg.clone()).await;
+        match timeout(duration, client.recv()).await {
+            Ok(resp) => {
+                return resp;
+            }
+            Err(e) => {
+                eprintln!("Timed out waiting for response ({}). Trying again...", e);
             }
         }
     }

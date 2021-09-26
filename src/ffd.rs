@@ -2,15 +2,14 @@
 //!
 //! The Fast File Daemon.
 
-use std::{net::SocketAddr, path::PathBuf, process::exit};
+use std::{io::SeekFrom, net::SocketAddr, path::PathBuf, process::exit};
 
 use clap::{App, Arg};
 use fork::{daemon, Fork};
 use proto::*;
 use tokio::{
     fs::{read_dir, OpenOptions},
-    io::AsyncReadExt,
-    net::{TcpListener, TcpStream},
+    io::{AsyncReadExt, AsyncSeekExt},
 };
 
 mod proto;
@@ -55,17 +54,35 @@ async fn main() {
     }
 
     let transport = proto::Transport::bind(8080).await;
-    let (mut listener, handle) = transport.start_server().await;
+    let (mut listener, _handle) = transport.start_server().await;
+
+    if matches.is_present("daemon") {
+        match daemon(false, false) {
+            Ok(Fork::Parent(pid)) => {
+                eprintln!("Spawned process {}", pid);
+                exit(0)
+            }
+            Ok(Fork::Child) => loop {
+                if let Some((req, src_addr)) = listener.recv().await {
+                    handle_request(req, src_addr, &mut listener, directory_path.clone()).await;
+                }
+            },
+            Err(e) => {
+                eprintln!("{}", e);
+                exit(1)
+            }
+        }
+    }
 
     loop {
         if let Some((req, src_addr)) = listener.recv().await {
-            println!("Got a request: {:?}", req);
-            run_server(req, src_addr, &mut listener, directory_path.clone()).await;
+            println!("Received a request {:?} from {}", req, src_addr);
+            handle_request(req, src_addr, &mut listener, directory_path.clone()).await;
         }
     }
 }
 
-async fn run_server(
+async fn handle_request(
     req: Request,
     src_addr: SocketAddr,
     listener: &mut Listener,
@@ -110,17 +127,17 @@ async fn run_server(
                 }
             };
 
-            let mut part = 0u32;
+            let mut byte_count = 0u32;
             let mut buf = vec![0; listener.preferred_chunk_size()];
 
             while let Ok(size) = file.read(&mut buf).await {
-                let end = size == 0;
+                let last = size == 0;
 
                 if let Err(e) = listener
                     .send((
                         Response::Part {
-                            num: part,
-                            last: size == 0,
+                            start_byte: byte_count,
+                            last,
                             data: buf[..size].to_vec(),
                         },
                         src_addr,
@@ -130,15 +147,59 @@ async fn run_server(
                     eprintln!("{}", e);
                     return;
                 }
+                eprintln!("Sent {}", byte_count);
 
-                part += 1;
+                byte_count += size as u32;
 
-                if end {
+                if last {
                     break;
                 }
             }
         }
-        proto::Request::DownloadPart { .. } => {}
+        proto::Request::DownloadPart {
+            path,
+            start_byte,
+            len,
+        } => {
+            let mut base_path = directory_path.clone();
+            base_path.push(path);
+
+            if !base_path.exists() {
+                if let Err(e) = listener.send((Response::NotAllowed, src_addr)).await {
+                    eprintln!("{}", e);
+                }
+                return;
+            }
+
+            let mut file = match OpenOptions::new()
+                .read(true)
+                .write(false)
+                .open(base_path)
+                .await
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    return;
+                }
+            };
+
+            file.seek(SeekFrom::Start(start_byte as u64)).await;
+
+            let mut data = vec![0; len as usize];
+            file.read_exact(&mut data).await;
+
+            listener
+                .send((
+                    Response::Part {
+                        start_byte,
+                        data,
+                        last: false,
+                    },
+                    src_addr,
+                ))
+                .await;
+        }
     }
 }
 

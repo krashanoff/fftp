@@ -6,6 +6,7 @@ use std::{
     fmt::Display,
     io::Read,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    process::exit,
     time,
 };
 
@@ -16,6 +17,7 @@ use tokio::{
     net::{TcpSocket, ToSocketAddrs, UdpSocket},
     sync::{mpsc, oneshot},
     task::JoinHandle,
+    time::{timeout, Duration},
 };
 
 #[derive(Debug)]
@@ -24,6 +26,7 @@ pub enum Error {
     IO(io::Error),
     MPSC(mpsc::error::SendError<Response>),
     Serialization(bincode::Error),
+    ConnectionTimeout,
     ImpossibleDataLen(u32),
     UnexpectedType,
     WrongChecksum,
@@ -62,7 +65,16 @@ pub enum Request {
     Download { path: String },
 
     /// Download a *part* of a file.
-    DownloadPart { path: String, part: u32 },
+    DownloadPart {
+        /// Path of the file.
+        path: String,
+
+        /// The byte to start at.
+        start_byte: u32,
+
+        /// The length of the data we are missing.
+        len: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +85,12 @@ pub enum Response {
     Directory(Vec<FileData>),
 
     /// Part of a file.
-    Part { num: u32, last: bool, data: Vec<u8> },
+    Part {
+        start_byte: u32,
+        /// Is this the last chunk of bytes?
+        last: bool,
+        data: Vec<u8>,
+    },
 
     /// Operation is not allowed.
     NotAllowed,
@@ -149,7 +166,7 @@ impl Transport {
 
         Self {
             sock,
-            preferred_chunk_size: 0,
+            preferred_chunk_size: 2048,
         }
     }
 
@@ -193,7 +210,7 @@ impl Transport {
     /// Spin up the [Transport] to handle queueing of requests and responses to the given
     /// address.
     pub async fn start_client<A: ToSocketAddrs>(self, addr: A) -> (Client, JoinHandle<()>) {
-        self.sock.connect(addr).await;
+        self.sock.connect(&addr).await;
         let (resp_tx, resp_rx) = mpsc::channel(50);
         let (req_tx, mut req_rx) = mpsc::channel(50);
         (
@@ -224,6 +241,7 @@ impl Display for Error {
             Self::IO(e) => e.fmt(f),
             Self::Serialization(e) => e.fmt(f),
             Self::MPSC(e) => e.fmt(f),
+            Self::ConnectionTimeout => write!(f, "timed out connecting"),
             Self::ImpossibleDataLen(len) => write!(f, "data length '{}' is impossible", len),
             Self::UnexpectedType => write!(f, "expected request/response or vice versa"),
             Self::WrongChecksum => write!(f, "wrong checksum"),
