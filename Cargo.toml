@@ -15,11 +15,8 @@ path = "src/ff.rs"
 
 [dependencies]
 bincode = "1.3"
-byteorder = "1.4"
 fork = "0.1"
-ring = "0.16"
 igd = { version = "0.12", features = ["aio", "tokio"] }
-either = { version = "1.6", features = ["serde"] }
 clap = { version = "2.33", default-features = false }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "fs", "net", "sync"] }

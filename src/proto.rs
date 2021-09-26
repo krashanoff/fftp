@@ -9,15 +9,12 @@ use std::{
     time,
 };
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use either::Either;
 use igd::{aio, SearchOptions};
-use ring::digest::{self, digest, SHA1_OUTPUT_LEN};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{self},
     net::{TcpSocket, ToSocketAddrs, UdpSocket},
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -41,20 +38,6 @@ pub struct Transport {
     preferred_chunk_size: usize,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-/// A [Frame] for transmitting content over UDP. The data field may not exceed
-/// `MAXIMUM_DATA_SIZE` bytes.
-struct Frame {
-    /// Length of our data field.
-    len: u32,
-
-    /// Our data field.
-    data: Vec<u8>,
-
-    /// Our checksum.
-    checksum: [u8; SHA1_OUTPUT_LEN],
-}
-
 /// Client for making [Requests](Request) and receiving [Responses](Response).
 pub struct Client {
     receiver: mpsc::Receiver<Response>,
@@ -63,8 +46,8 @@ pub struct Client {
 
 /// Server for receiving [Requests](Request) and sending [Responses](Response).
 pub struct Listener {
-    receiver: mpsc::Receiver<Request>,
-    sender: mpsc::Sender<Response>,
+    receiver: mpsc::Receiver<(Request, SocketAddr)>,
+    sender: mpsc::Sender<(Response, SocketAddr)>,
     chunk_size: usize,
 }
 
@@ -109,132 +92,15 @@ pub struct FileData {
     pub size: u64,
 }
 
-impl Frame {
-    /// Maximum amount of data transmittable in a single [Frame].
-    pub const MAXIMUM_DATA_SIZE: usize = 65535 - 32 - SHA1_OUTPUT_LEN;
-
-    /// Maximum size of a single [Frame].
-    pub const MAXIMUM_SIZE: usize = 65535;
-
-    /// Recalculates the checksum of our [Frame].
-    fn compute_checksum(&self) -> digest::Digest {
-        let mut frame_copy = self.clone();
-        frame_copy.checksum = [0; digest::SHA1_OUTPUT_LEN];
-        digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, self.data.as_slice())
-    }
-
-    /// Recalculates the checksum of our [Frame] and compares it to the current value.
-    pub fn valid(&self) -> bool {
-        self.compute_checksum().as_ref() == self.checksum
-    }
-
-    /// Outputs the data of this struct as a [Vec] transmittable on the wire.
-    pub fn to_vec(&self) -> Vec<u8> {
-        let mut buf = vec![];
-        buf.write_u32::<BigEndian>(self.len).unwrap();
-        self.data.iter().for_each(|&b| buf.write_u8(b).unwrap());
-        self.checksum.iter().for_each(|&b| buf.write_u8(b).unwrap());
-        buf
-    }
-}
-
-impl TryFrom<&[u8]> for Frame {
-    type Error = Error;
-
-    // Deserialize a [Frame] from some bytes.
-    fn try_from(mut value: &[u8]) -> Result<Self, Self::Error> {
-        let len = value.read_u32::<BigEndian>()?;
-
-        if len > Self::MAXIMUM_DATA_SIZE as u32 {
-            return Err(Error::ImpossibleDataLen(len));
-        }
-
-        let mut data = vec![0; len as usize];
-        value.read_exact(&mut data)?;
-
-        let mut checksum = [0; digest::SHA1_OUTPUT_LEN];
-        value.read_exact(&mut checksum)?;
-
-        let current = Self {
-            len,
-            data,
-            checksum,
-        };
-
-        if !current.valid() {
-            return Err(Error::WrongChecksum);
-        }
-
-        Ok(current)
-    }
-}
-
-impl From<Either<Request, Response>> for Frame {
-    // Build our frame.
-    fn from(r: Either<Request, Response>) -> Self {
-        let data = bincode::serialize(&r).unwrap();
-        let mut s: Frame = Default::default();
-        s.len = data.len() as u32;
-        s.data = data;
-        s.checksum = digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, s.to_vec().as_slice())
-            .as_ref()
-            .try_into()
-            .unwrap();
-        s
-    }
-}
-
-impl From<Request> for Frame {
-    fn from(r: Request) -> Self {
-        Self::from(Either::Left(r))
-    }
-}
-
-impl From<Response> for Frame {
-    fn from(r: Response) -> Self {
-        Self::from(Either::Right(r))
-    }
-}
-
-impl TryInto<Either<Request, Response>> for Frame {
-    type Error = Error;
-    fn try_into(self) -> Result<Either<Request, Response>, Self::Error> {
-        if !self.valid() {
-            return Err(Error::WrongChecksum);
-        }
-        Ok(bincode::deserialize(self.data.as_slice())?)
-    }
-}
-
-impl TryInto<Request> for Frame {
-    type Error = Error;
-    fn try_into(self) -> Result<Request, Self::Error> {
-        match self.try_into()? {
-            Either::Left(r) => Ok(r),
-            _ => Err(Error::UnexpectedType),
-        }
-    }
-}
-
-impl TryInto<Response> for Frame {
-    type Error = Error;
-    fn try_into(self) -> Result<Response, Self::Error> {
-        match self.try_into()? {
-            Either::Right(r) => Ok(r),
-            _ => Err(Error::UnexpectedType),
-        }
-    }
-}
-
 impl Listener {
     /// Receive a [Request].
-    pub async fn recv(&mut self) -> Option<Request> {
+    pub async fn recv(&mut self) -> Option<(Request, SocketAddr)> {
         self.receiver.recv().await
     }
 
     /// Queue a [Response] to send.
-    pub async fn send(&self, r: Response) -> Result<(), Error> {
-        Ok(self.sender.send(r).await?)
+    pub async fn send(&self, r: (Response, SocketAddr)) -> Result<(), Error> {
+        Ok(self.sender.send(r).await.unwrap())
     }
 
     /// Get the preferred chunk size of transfer.
@@ -243,7 +109,21 @@ impl Listener {
     }
 }
 
+impl Client {
+    pub async fn recv(&mut self) -> Option<Response> {
+        self.receiver.recv().await
+    }
+
+    pub async fn send(&self, r: Request) -> Result<(), Error> {
+        Ok(self.sender.send(r).await.unwrap())
+    }
+}
+
 impl Transport {
+    /// Maximum size of a single transport frame.
+    const MAXIMUM_SIZE: usize = 65535;
+
+    /// Bind to some port, forwarding with uPNP if requested.
     async fn bind_to(port: u16, forward: bool) -> Self {
         let local_addr = SocketAddrV4::new("0.0.0.0".parse().unwrap(), port);
 
@@ -283,12 +163,6 @@ impl Transport {
         Self::bind_to(port, false).await
     }
 
-    /// Set the preferred chunk size.
-    pub fn chunk_size(mut self, size: usize) -> Self {
-        self.preferred_chunk_size = size;
-        self
-    }
-
     /// Spin up the [Transport] to handle queueing of requests and responses.
     pub async fn start_server(self) -> (Listener, JoinHandle<()>) {
         let (resp_tx, mut resp_rx) = mpsc::channel(50);
@@ -300,56 +174,43 @@ impl Transport {
                 chunk_size: self.preferred_chunk_size,
             },
             tokio::spawn(async move {
+                let mut buf = [0; Self::MAXIMUM_SIZE];
                 loop {
-                    // Handle frame acquisition.
-                    let mut buf = [0; Frame::MAXIMUM_DATA_SIZE];
-                    let (amt_read, src_addr) = self.sock.recv_from(&mut buf).await.unwrap();
-                    req_tx
-                        .send(Frame::try_from(&buf[..]).unwrap().try_into().unwrap())
-                        .await;
-
-                        // Handle sending of responses.
-                    match resp_rx.recv().await {
-                        Some(resp) => {
-                            self.sock
-                                .send(
-                                    bincode::serialize(&Frame::from(resp).to_vec())
-                                        .unwrap()
-                                        .as_slice(),
-                                )
-                                .await
-                                .unwrap();
+                    tokio::select! {
+                        Ok((_, src_addr)) = self.sock.recv_from(&mut buf) => {
+                            req_tx.send((bincode::deserialize::<Request>(&buf[..]).unwrap(), src_addr)).await;
                         }
-                        _ => {}
+                        Some((resp, src_addr)) = resp_rx.recv() => {
+                            // TODO: send_to
+                            self.sock.send_to(bincode::serialize(&resp).unwrap().as_slice(), src_addr).await;
+                        }
                     }
                 }
             }),
         )
     }
 
-    /// Spin up the [Transport] to handle queueing of requests and responses.
-    pub async fn start_client(self) -> (Client, JoinHandle<()>) {
-        let (resp_tx, mut resp_rx) = mpsc::channel(50);
-        let (req_tx, req_rx) = mpsc::channel(50);
+    /// Spin up the [Transport] to handle queueing of requests and responses to the given
+    /// address.
+    pub async fn start_client<A: ToSocketAddrs>(self, addr: A) -> (Client, JoinHandle<()>) {
+        self.sock.connect(addr).await;
+        let (resp_tx, resp_rx) = mpsc::channel(50);
+        let (req_tx, mut req_rx) = mpsc::channel(50);
         (
             Client {
-                receiver: req_rx,
-                sender: resp_tx,
+                receiver: resp_rx,
+                sender: req_tx,
             },
             tokio::spawn(async move {
+                let mut buf = [0; Self::MAXIMUM_SIZE];
                 loop {
-                    match resp_rx.recv().await {
-                        Some(resp) => {
-                            self.sock
-                                .send(
-                                    bincode::serialize(&Frame::from(resp).to_vec())
-                                        .unwrap()
-                                        .as_slice(),
-                                )
-                                .await
-                                .unwrap();
+                    tokio::select! {
+                        Ok(_) = self.sock.recv(&mut buf) => {
+                            resp_tx.send(bincode::deserialize(&buf[..]).unwrap()).await;
                         }
-                        _ => {}
+                        Some(req) = req_rx.recv() => {
+                            self.sock.send(bincode::serialize(&req).unwrap().as_slice()).await;
+                        }
                     }
                 }
             }),

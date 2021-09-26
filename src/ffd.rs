@@ -2,7 +2,7 @@
 //!
 //! The Fast File Daemon.
 
-use std::{path::PathBuf, process::exit};
+use std::{net::SocketAddr, path::PathBuf, process::exit};
 
 use clap::{App, Arg};
 use fork::{daemon, Fork};
@@ -55,32 +55,43 @@ async fn main() {
     }
 
     let transport = proto::Transport::bind(8080).await;
-    let (mut client, handle) = transport.start_server().await;
+    let (mut listener, handle) = transport.start_server().await;
 
     loop {
-        if let Some(req) = client.recv().await {
-            run_server(req, &mut client, directory_path.clone()).await;
+        if let Some((req, src_addr)) = listener.recv().await {
+            println!("Got a request: {:?}", req);
+            run_server(req, src_addr, &mut listener, directory_path.clone()).await;
         }
     }
 }
 
-async fn run_server(req: Request, client: &mut Listener, directory_path: PathBuf) {
+async fn run_server(
+    req: Request,
+    src_addr: SocketAddr,
+    listener: &mut Listener,
+    directory_path: PathBuf,
+) {
     match req {
         proto::Request::List => {
-            if let Err(e) = client
-                .send(Response::Directory(dir_data(directory_path.clone()).await))
+            println!("Servicing request for list");
+            if let Err(e) = listener
+                .send((
+                    Response::Directory(dir_data(directory_path.clone()).await),
+                    src_addr,
+                ))
                 .await
             {
                 eprintln!("{}", e);
                 exit(1)
             }
+            println!("Done.");
         }
         proto::Request::Download { path } => {
             let mut base_path = directory_path.clone();
             base_path.push(path);
 
             if !base_path.exists() {
-                if let Err(e) = client.send(Response::NotAllowed).await {
+                if let Err(e) = listener.send((Response::NotAllowed, src_addr)).await {
                     eprintln!("{}", e);
                 }
                 return;
@@ -100,17 +111,20 @@ async fn run_server(req: Request, client: &mut Listener, directory_path: PathBuf
             };
 
             let mut part = 0u32;
-            let mut buf = vec![0; client.preferred_chunk_size()];
+            let mut buf = vec![0; listener.preferred_chunk_size()];
 
             while let Ok(size) = file.read(&mut buf).await {
                 let end = size == 0;
 
-                if let Err(e) = client
-                    .send(Response::Part {
-                        num: part,
-                        last: size == 0,
-                        data: buf[..size].to_vec(),
-                    })
+                if let Err(e) = listener
+                    .send((
+                        Response::Part {
+                            num: part,
+                            last: size == 0,
+                            data: buf[..size].to_vec(),
+                        },
+                        src_addr,
+                    ))
                     .await
                 {
                     eprintln!("{}", e);
