@@ -3,12 +3,13 @@
 //! The Fast File client.
 
 use clap::{App, Arg, SubCommand};
+use igd::aio;
 use tokio::{
     io::{stdout, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpStream, UdpSocket},
 };
 
-use std::{path::PathBuf, process::exit};
+use std::{path::PathBuf, process::exit, time::Duration};
 
 mod proto;
 
@@ -30,14 +31,28 @@ async fn main() {
         )
         .get_matches();
 
-    let mut conn =
-        match TcpStream::connect(matches.value_of("addr").expect("an address is required")).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to connect: {}", e);
-                exit(1)
-            }
-        };
+    // Bind our UDP socket.
+    let socket = UdpSocket::bind("0.0.0.0")
+        .await
+        .expect("failed to bind an UDP socket");
+    let addr = socket.local_addr().unwrap();
+
+    // Acquire a port to receive the response on.
+    let re = aio::search_gateway(Default::default()).await.unwrap();
+    let _external_addr = re
+        .get_any_address(
+            igd::PortMappingProtocol::UDP,
+            format!("{}:{}", &addr.ip(), &addr.port()).parse().unwrap(),
+            5,
+            "ff client",
+        )
+        .await
+        .expect("failed to acquire forwarded port from gateway");
+
+    socket
+        .connect(matches.value_of("addr").unwrap())
+        .await
+        .unwrap();
 
     if let Some(_) = matches.subcommand_matches("ls") {
         if let Err(e) = proto::Message::List.send(&mut conn).await {
