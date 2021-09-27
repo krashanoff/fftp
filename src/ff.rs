@@ -8,7 +8,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-use std::{path::PathBuf, process::exit};
+use std::{io::Cursor, path::PathBuf, process::exit};
 
 mod proto;
 
@@ -22,7 +22,13 @@ async fn main() {
         .args(&[Arg::with_name("addr")
             .required(true)
             .help("address to connect to")])
-        .subcommand(SubCommand::with_name("ls").about("List contents held remotely"))
+        .subcommand(
+            SubCommand::with_name("ls")
+                .about("List contents held remotely")
+                .args(&[Arg::with_name("path")
+                    .default_value(".")
+                    .help("Path of the directory to list.")]),
+        )
         .subcommand(
             SubCommand::with_name("get")
                 .args(&[Arg::with_name("path")
@@ -39,14 +45,22 @@ async fn main() {
         .start_client(matches.value_of("addr").unwrap())
         .await;
 
-    if let Some(_) = matches.subcommand_matches("ls") {
-        match send_recv_ad_nauseum(&mut client, Request::List, Duration::from_secs(3)).await {
+    if let Some(matches) = matches.subcommand_matches("ls") {
+        match send_recv_ad_nauseum(
+            &mut client,
+            Request::List {
+                path: matches.value_of("path").unwrap().to_string(),
+            },
+            Duration::from_secs(3),
+        )
+        .await
+        {
             Some(Response::Directory(files)) => {
                 println!("{:<20} | {:<20} | {:<20}", "Path", "Created", "Size");
                 println!("{}", "-".repeat(66));
                 files.iter().for_each(|f| {
                     println!(
-                        "{:<20} | {:<20} | {:<20}",
+                        "{:<20.20} | {:<20.20} | {:<20.20}",
                         f.path,
                         f.created.as_millis(),
                         f.size
@@ -83,20 +97,17 @@ async fn main() {
                 exit(1)
             }
 
-            let mut file = vec![];
+            let mut file = Cursor::new(vec![]);
             while let Some(Response::Part {
                 last: false,
                 data,
                 start_byte,
             }) = client.recv().await
             {
-                eprintln!("Received {} bytes starting at {}", &data.len(), &start_byte);
-                data.iter().cloned().fold(0, |acc, byte| {
-                    file.insert(start_byte as usize + acc, byte);
-                    acc + 1
-                });
+                file.set_position(start_byte as u64);
+                file.write_all(data.as_slice()).await;
             }
-            stdout.write_all(file.as_slice()).await.unwrap();
+            stdout.write_all(file.get_ref().as_slice()).await.unwrap();
         }
     }
 }

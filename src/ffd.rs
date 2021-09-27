@@ -46,7 +46,9 @@ async fn main() {
         .expect("a buffer size is required")
         .parse()
         .expect("a valid buffer size is required");
-    let directory_path: PathBuf = matches.value_of("directory").unwrap().into();
+    let directory_path = PathBuf::from(matches.value_of("directory").unwrap())
+        .canonicalize()
+        .unwrap();
 
     if !directory_path.exists() || !directory_path.is_dir() {
         eprintln!("Path must be to a directory");
@@ -89,19 +91,27 @@ async fn handle_request(
     directory_path: PathBuf,
 ) {
     match req {
-        proto::Request::List => {
-            println!("Servicing request for list");
+        proto::Request::List { path } => {
+            let full_path = directory_path.clone().join(path);
+
+            if !full_path
+                .canonicalize()
+                .unwrap()
+                .starts_with(directory_path)
+            {
+                eprintln!("Invalid path");
+                if let Err(e) = listener.send((Response::NotAllowed, src_addr)).await {
+                    eprintln!("{}", e);
+                }
+                return;
+            }
+
             if let Err(e) = listener
-                .send((
-                    Response::Directory(dir_data(directory_path.clone()).await),
-                    src_addr,
-                ))
+                .send((Response::Directory(dir_data(full_path).await), src_addr))
                 .await
             {
                 eprintln!("{}", e);
-                exit(1)
             }
-            println!("Done.");
         }
         proto::Request::Download { path } => {
             let mut base_path = directory_path.clone();

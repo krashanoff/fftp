@@ -59,7 +59,9 @@ pub struct Listener {
 /// Types of requests that may be sent from a client.
 pub enum Request {
     /// List files available for download.
-    List,
+    List {
+        path: String,
+    },
 
     /// Download a file.
     Download { path: String },
@@ -166,7 +168,7 @@ impl Transport {
 
         Self {
             sock,
-            preferred_chunk_size: 2048,
+            preferred_chunk_size: 4096,
         }
     }
 
