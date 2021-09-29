@@ -25,9 +25,15 @@ async fn main() {
         .subcommand(
             SubCommand::with_name("ls")
                 .about("List contents held remotely")
-                .args(&[Arg::with_name("path")
-                    .default_value(".")
-                    .help("Path of the directory to list.")]),
+                .args(&[
+                    Arg::with_name("path")
+                        .default_value(".")
+                        .help("Path of the directory to list."),
+                    Arg::with_name("csv")
+                        .short("c")
+                        .takes_value(false)
+                        .help("Print directory information as a CSV."),
+                ]),
         )
         .subcommand(
             SubCommand::with_name("get")
@@ -56,16 +62,7 @@ async fn main() {
         .await
         {
             Some(Response::Directory(files)) => {
-                println!("{:<20} | {:<20} | {:<20}", "Path", "Created", "Size");
-                println!("{}", "-".repeat(66));
-                files.iter().for_each(|f| {
-                    println!(
-                        "{:<20.20} | {:<20.20} | {:<20.20}",
-                        f.path,
-                        f.created.as_millis(),
-                        f.size
-                    )
-                });
+                print_filedata(files, matches.is_present("csv"));
                 exit(0)
             }
             Some(Response::NotAllowed) => {
@@ -128,5 +125,33 @@ async fn send_recv_ad_nauseum(
                 eprintln!("Timed out waiting for response ({}). Trying again...", e);
             }
         }
+    }
+}
+
+/// Prints a [Vec<FileData>] nicely.
+fn print_filedata(data: Vec<FileData>, csv: bool) {
+    if !csv {
+        let longest_name = data.iter().fold(20, |acc, data| acc.max(data.path.len()));
+        println!(
+            "{:<longest_name$} | {:<12} | {:<12}",
+            "Path",
+            "Created",
+            "Size",
+            longest_name = longest_name as usize,
+        );
+        println!("{}", "-".repeat(66));
+        data.iter().for_each(|f| {
+            println!(
+                "{:<longest_name$} | {:<12} | {:<12}",
+                f.path,
+                f.created.as_millis(),
+                f.size,
+                longest_name = longest_name as usize,
+            )
+        });
+    } else {
+        println!("path,created,size");
+        data.iter()
+            .for_each(|f| println!("{},{},{}", f.path, f.created.as_millis(), f.size));
     }
 }
