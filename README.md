@@ -19,13 +19,13 @@ mkdir test
 echo "hi" > test/test.txt
 
 # Start running a server.
-ffd -d localhost:8080 test
+ffd -d MY_LOCAL_IP:8080 test
 
 # List files available.
-ff localhost:8080 ls
+ff MY_LOCAL_IP:8080 ls
 
 # Download a file.
-ff localhost:8080 get test.txt
+ff MY_LOCAL_IP:8080 get test.txt
 ```
 
 ## Goals
