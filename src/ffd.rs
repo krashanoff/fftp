@@ -24,23 +24,29 @@ async fn main() {
                 .short("d")
                 .long("daemon")
                 .takes_value(false)
-                .help("detach the process from the terminal"),
+                .help("Detach the process from the terminal"),
             Arg::with_name("buffer-size")
                 .short("b")
                 .long("buffer-size")
                 .default_value("4096")
-                .help("sets the size of the buffer allocated to each file transfer transaction"),
-            Arg::with_name("addr")
-                .takes_value(true)
-                .required(true)
-                .help("address to listen for new connections on"),
+                .help(
+                    "Sets the size of the read buffer allocated to each file transfer transaction",
+                ),
             Arg::with_name("directory")
                 .required(true)
-                .help("directory to serve files from"),
+                .value_name("PATH")
+                .help("Directory to serve files from"),
+            Arg::with_name("addrs")
+                .takes_value(true)
+                .value_name("ADDRS")
+                .required(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("Addresses to listen for new connections on, separated by commas"),
         ])
         .get_matches();
 
-    let addr = matches.value_of("addr").expect("address expected");
+    let addrs = matches.value_of("addrs").expect("address(es) expected");
     let buffer_size: usize = matches
         .value_of("buffer-size")
         .expect("a buffer size is required")
@@ -55,7 +61,10 @@ async fn main() {
         exit(1)
     }
 
-    let transport = proto::Transport::bind(8080).await;
+    let transport = proto::Transport::bind(8080)
+        .await
+        .expect("failed to bind")
+        .buffer_size(buffer_size);
     let (mut listener, _handle) = transport.start_server().await;
 
     if matches.is_present("daemon") {
@@ -194,10 +203,15 @@ async fn handle_request(
                 }
             };
 
-            file.seek(SeekFrom::Start(start_byte as u64)).await;
+            if let Err(e) = file.seek(SeekFrom::Start(start_byte as u64)).await {
+                eprintln!("Failed to seek in file: {}", e);
+                exit(1);
+            }
 
             let mut data = vec![0; len as usize];
-            file.read_exact(&mut data).await;
+            if let Err(e) = file.read_exact(&mut data).await {
+                eprintln!("Failed to read from file: {}", e);
+            }
 
             listener
                 .send((
@@ -208,7 +222,8 @@ async fn handle_request(
                     },
                     src_addr,
                 ))
-                .await;
+                .await
+                .expect("channel closed");
         }
     }
 }

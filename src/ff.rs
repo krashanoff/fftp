@@ -19,9 +19,16 @@ async fn main() {
     let matches = App::new("ff")
         .version("v0.1.0")
         .long_version("v0.1.0 ff@20")
-        .args(&[Arg::with_name("addr")
-            .required(true)
-            .help("address to connect to")])
+        .args(&[
+            Arg::with_name("ext")
+                .short("e")
+                .long("bind-ext")
+                .takes_value(false)
+                .help("Connect from an external IP using UPnP on supported gateways."),
+            Arg::with_name("addr")
+                .required(true)
+                .help("address to connect to"),
+        ])
         .subcommand(
             SubCommand::with_name("ls")
                 .about("List contents held remotely")
@@ -46,10 +53,25 @@ async fn main() {
         .get_matches();
 
     // Create our transport.
-    let transport = Transport::bind(0).await;
-    let (mut client, _handle) = transport
+    let transport = match matches.is_present("ext") {
+        true => Transport::bind_ext(0)
+            .await
+            .expect("failed to bind to external port"),
+        false => Transport::bind(0)
+            .await
+            .expect("failed to bind to internal port"),
+    };
+
+    let (mut client, _handle) = match transport
         .start_client(matches.value_of("addr").unwrap())
-        .await;
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{}", e);
+            exit(1);
+        }
+    };
 
     if let Some(matches) = matches.subcommand_matches("ls") {
         match send_recv_ad_nauseum(
@@ -102,7 +124,10 @@ async fn main() {
             }) = client.recv().await
             {
                 file.set_position(start_byte as u64);
-                file.write_all(data.as_slice()).await;
+                if let Err(e) = file.write_all(data.as_slice()).await {
+                    eprintln!("Failed to make a write to disk: {}", e);
+                    exit(1)
+                }
             }
             stdout.write_all(file.get_ref().as_slice()).await.unwrap();
         }
@@ -116,7 +141,7 @@ async fn send_recv_ad_nauseum(
     duration: Duration,
 ) -> Option<Response> {
     loop {
-        client.send(msg.clone()).await;
+        client.send(msg.clone()).await.expect("channel closed");
         match timeout(duration, client.recv()).await {
             Ok(resp) => {
                 return resp;
