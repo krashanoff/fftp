@@ -24,7 +24,7 @@ async fn main() {
                 .short("e")
                 .long("bind-ext")
                 .takes_value(false)
-                .help("Connect from an external IP using UPnP on supported gateways."),
+                .help("Connect from an external IP using UPnP on supported gateways"),
             Arg::with_name("addr")
                 .required(true)
                 .help("address to connect to"),
@@ -35,20 +35,23 @@ async fn main() {
                 .args(&[
                     Arg::with_name("path")
                         .default_value(".")
-                        .help("Path of the directory to list."),
+                        .help("Path of the directory to list"),
                     Arg::with_name("csv")
                         .short("c")
                         .takes_value(false)
-                        .help("Print directory information as a CSV."),
+                        .help("Print directory information as a CSV"),
                 ]),
         )
         .subcommand(
             SubCommand::with_name("get")
-                .args(&[Arg::with_name("path")
-                    .required(true)
-                    .multiple(true)
-                    .help("Path(s) of the file(s) to download")])
-                .about("Download a file"),
+                .arg(
+                    Arg::with_name("path")
+                        .value_name("PATH")
+                        .required(true)
+                        .multiple(true)
+                        .help("Path(s) of the file(s) to download"),
+                )
+                .about("Download files"),
         )
         .get_matches();
 

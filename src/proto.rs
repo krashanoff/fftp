@@ -2,8 +2,8 @@
 
 use std::{fmt::Display, net::SocketAddr, time};
 
+use bincode;
 use igd::aio;
-use local_ip_address::local_ip;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io,
@@ -30,8 +30,8 @@ pub struct Transport {
     /// Communication socket.
     sock: UdpSocket,
 
-    /// Size used for handling file sends.
-    preferred_chunk_size: usize,
+    /// Internal read buffer size.
+    buffer_size: usize,
 }
 
 /// Client for making [Requests](Request) and receiving [Responses](Response).
@@ -44,7 +44,6 @@ pub struct Client {
 pub struct Listener {
     receiver: mpsc::Receiver<(Request, SocketAddr)>,
     sender: mpsc::Sender<(Response, SocketAddr)>,
-    chunk_size: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,11 +111,6 @@ impl Listener {
     pub async fn send(&self, r: (Response, SocketAddr)) -> Result<(), Error> {
         Ok(self.sender.send(r).await.unwrap())
     }
-
-    /// Get the preferred chunk size of transfer.
-    pub fn preferred_chunk_size(&self) -> usize {
-        self.chunk_size
-    }
 }
 
 impl Client {
@@ -133,10 +127,12 @@ impl Transport {
     /// Maximum size of a single transport frame.
     const MAXIMUM_SIZE: usize = 65535;
 
+    /// Default buffer size.
+    pub const DEFAULT_BUFFER_SIZE: usize = 4096;
+
     /// Bind to some port, forwarding with uPNP if requested.
     async fn bind_to(port: u16, forward: bool) -> Result<Self, Error> {
-        let local_ip = local_ip().unwrap();
-        let local_addr = SocketAddr::new(local_ip, port);
+        let local_addr = SocketAddr::new("0.0.0.0".parse().unwrap(), port);
 
         let sock = UdpSocket::bind(local_addr).await.unwrap();
         let local_addr = match sock.local_addr().unwrap() {
@@ -155,7 +151,7 @@ impl Transport {
 
         Ok(Self {
             sock,
-            preferred_chunk_size: 4096,
+            buffer_size: Self::DEFAULT_BUFFER_SIZE,
         })
     }
 
@@ -171,7 +167,7 @@ impl Transport {
 
     /// Sets the buffer size of this [Transport].
     pub fn buffer_size(mut self, size: usize) -> Self {
-        self.preferred_chunk_size = size;
+        self.buffer_size = size;
         self
     }
 
@@ -183,7 +179,6 @@ impl Transport {
             Listener {
                 receiver: req_rx,
                 sender: resp_tx,
-                chunk_size: self.preferred_chunk_size,
             },
             tokio::spawn(async move {
                 let mut buf = [0; Self::MAXIMUM_SIZE];
@@ -193,7 +188,6 @@ impl Transport {
                             req_tx.send((bincode::deserialize::<Request>(&buf[..]).unwrap(), src_addr)).await.expect("channel closed");
                         }
                         Some((resp, src_addr)) = resp_rx.recv() => {
-                            // TODO: send_to
                             self.sock.send_to(bincode::serialize(&resp).unwrap().as_slice(), src_addr).await;
                         }
                     }
@@ -217,7 +211,7 @@ impl Transport {
                 sender: req_tx,
             },
             tokio::spawn(async move {
-                let mut buf = [0; Self::MAXIMUM_SIZE];
+                let mut buf = vec![0; self.buffer_size];
                 loop {
                     tokio::select! {
                         Ok(_) = self.sock.recv(&mut buf) => {

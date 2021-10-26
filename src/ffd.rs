@@ -5,8 +5,6 @@
 use std::{io::SeekFrom, net::SocketAddr, path::PathBuf, process::exit};
 
 use clap::{App, Arg};
-use fork::{daemon, Fork};
-use proto::*;
 use tokio::{
     fs::{read_dir, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt},
@@ -14,44 +12,49 @@ use tokio::{
 
 mod proto;
 
+use proto::*;
+
+static mut BUF_SIZE: usize = 0;
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let matches = App::new("ffd")
         .version("v0.1.0")
         .long_version("v0.1.0 ff@20")
         .args(&[
-            Arg::with_name("daemon")
-                .short("d")
-                .long("daemon")
-                .takes_value(false)
-                .help("Detach the process from the terminal"),
             Arg::with_name("buffer-size")
                 .short("b")
                 .long("buffer-size")
                 .default_value("4096")
                 .help(
                     "Sets the size of the read buffer allocated to each file transfer transaction",
-                ),
+                )
+                .hidden_short_help(true),
             Arg::with_name("directory")
                 .required(true)
                 .value_name("PATH")
                 .help("Directory to serve files from"),
-            Arg::with_name("addrs")
+            Arg::with_name("port")
                 .takes_value(true)
-                .value_name("ADDRS")
+                .value_name("PORT")
                 .required(true)
-                .require_delimiter(true)
-                .value_delimiter(",")
-                .help("Addresses to listen for new connections on, separated by commas"),
+                .help("Port to listen for new connections on"),
         ])
         .get_matches();
 
-    let addrs = matches.value_of("addrs").expect("address(es) expected");
-    let buffer_size: usize = matches
-        .value_of("buffer-size")
-        .expect("a buffer size is required")
+    unsafe {
+        BUF_SIZE = matches
+            .value_of("buffer-size")
+            .expect("a buffer size is required")
+            .parse()
+            .expect("buffer size must be numerical");
+    }
+
+    let port: u16 = matches
+        .value_of("port")
+        .expect("port number expected")
         .parse()
-        .expect("a valid buffer size is required");
+        .expect("PORT must be a number");
     let directory_path = PathBuf::from(matches.value_of("directory").unwrap())
         .canonicalize()
         .unwrap();
@@ -61,29 +64,8 @@ async fn main() {
         exit(1)
     }
 
-    let transport = proto::Transport::bind(8080)
-        .await
-        .expect("failed to bind")
-        .buffer_size(buffer_size);
+    let transport = proto::Transport::bind(port).await.expect("failed to bind");
     let (mut listener, _handle) = transport.start_server().await;
-
-    if matches.is_present("daemon") {
-        match daemon(false, false) {
-            Ok(Fork::Parent(pid)) => {
-                eprintln!("Spawned process {}", pid);
-                exit(0)
-            }
-            Ok(Fork::Child) => loop {
-                if let Some((req, src_addr)) = listener.recv().await {
-                    handle_request(req, src_addr, &mut listener, directory_path.clone()).await;
-                }
-            },
-            Err(e) => {
-                eprintln!("{}", e);
-                exit(1)
-            }
-        }
-    }
 
     loop {
         if let Some((req, src_addr)) = listener.recv().await {
@@ -147,7 +129,7 @@ async fn handle_request(
             };
 
             let mut byte_count = 0u32;
-            let mut buf = vec![0; listener.preferred_chunk_size()];
+            let mut buf = unsafe { vec![0; BUF_SIZE] };
 
             while let Ok(size) = file.read(&mut buf).await {
                 let last = size == 0;

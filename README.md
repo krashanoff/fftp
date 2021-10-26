@@ -19,7 +19,7 @@ mkdir test
 echo "hi" > test/test.txt
 
 # Start running a server.
-ffd -d MY_LOCAL_IP:8080 test
+ffd MY_LOCAL_IP:8080 test &
 
 # List files available.
 ff MY_LOCAL_IP:8080 ls
