@@ -17,8 +17,8 @@ use proto::*;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let matches = App::new("ffd")
-        .version("v0.1.0")
-        .long_version("v0.1.0 ff@20")
+        .version("v0.2.0")
+        .long_version("v0.2.0 ff@15")
         .args(&[
             Arg::with_name("directory")
                 .required(true)
