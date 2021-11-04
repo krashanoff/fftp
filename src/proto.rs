@@ -21,16 +21,21 @@ const MAXIMUM_SIZE: usize = 65535;
 mod encoding {
     use bincode::{
         self,
-        config::{BigEndian, Bounded, WithOtherEndian, WithOtherLimit},
+        config::{
+            BigEndian, Bounded, RejectTrailing, WithOtherEndian, WithOtherLimit, WithOtherTrailing,
+        },
         DefaultOptions, Options,
     };
     use lazy_static::lazy_static;
 
     lazy_static! {
-        pub static ref BINCODE_OPTS: WithOtherLimit<WithOtherEndian<DefaultOptions, BigEndian>, Bounded> =
-            bincode::DefaultOptions::new()
-                .with_big_endian()
-                .with_limit(super::MAXIMUM_SIZE as u64);
+        pub static ref BINCODE_OPTS: WithOtherTrailing<
+            WithOtherLimit<WithOtherEndian<DefaultOptions, BigEndian>, Bounded>,
+            RejectTrailing,
+        > = bincode::DefaultOptions::new()
+            .with_big_endian()
+            .with_limit(super::MAXIMUM_SIZE as u64)
+            .reject_trailing_bytes();
     }
 }
 
