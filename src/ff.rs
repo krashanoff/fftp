@@ -109,6 +109,7 @@ async fn main() {
         let mut stdout = stdout();
 
         for path in paths {
+            eprintln!("Sending request");
             if let Err(e) = client
                 .send(Request::Download {
                     path: path.to_str().unwrap().to_string(),
@@ -118,6 +119,7 @@ async fn main() {
                 eprintln!("{}", e);
                 exit(1)
             }
+            eprintln!("Request sent");
 
             let mut file = Cursor::new(vec![]);
             while let Some(Response::Part {

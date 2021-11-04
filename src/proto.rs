@@ -2,7 +2,7 @@
 
 use std::{fmt::Display, net::SocketAddr, time};
 
-use bincode;
+use bincode::{self, Options};
 use igd::aio;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -11,6 +11,28 @@ use tokio::{
     sync::mpsc,
     task::JoinHandle,
 };
+
+/// Suggested size for data field of FFTP frame.
+pub const DATA_SIZE: usize = 4096;
+
+/// Maximum size of a single transport frame.
+const MAXIMUM_SIZE: usize = 65535;
+
+mod encoding {
+    use bincode::{
+        self,
+        config::{BigEndian, Bounded, WithOtherEndian, WithOtherLimit},
+        DefaultOptions, Options,
+    };
+    use lazy_static::lazy_static;
+
+    lazy_static! {
+        pub static ref BINCODE_OPTS: WithOtherLimit<WithOtherEndian<DefaultOptions, BigEndian>, Bounded> =
+            bincode::DefaultOptions::new()
+                .with_big_endian()
+                .with_limit(super::MAXIMUM_SIZE as u64);
+    }
+}
 
 #[derive(Debug)]
 /// Types of communication errors that can occur.
@@ -29,9 +51,6 @@ pub enum Error {
 pub struct Transport {
     /// Communication socket.
     sock: UdpSocket,
-
-    /// Internal read buffer size.
-    buffer_size: usize,
 }
 
 /// Client for making [Requests](Request) and receiving [Responses](Response).
@@ -124,12 +143,6 @@ impl Client {
 }
 
 impl Transport {
-    /// Maximum size of a single transport frame.
-    const MAXIMUM_SIZE: usize = 65535;
-
-    /// Default buffer size.
-    pub const DEFAULT_BUFFER_SIZE: usize = 4096;
-
     /// Bind to some port, forwarding with uPNP if requested.
     async fn bind_to(port: u16, forward: bool) -> Result<Self, Error> {
         let local_addr = SocketAddr::new("0.0.0.0".parse().unwrap(), port);
@@ -149,10 +162,7 @@ impl Transport {
                 .expect("failed to acquire forwarded port from gateway");
         }
 
-        Ok(Self {
-            sock,
-            buffer_size: Self::DEFAULT_BUFFER_SIZE,
-        })
+        Ok(Self { sock })
     }
 
     /// Bind to an external port.
@@ -165,12 +175,6 @@ impl Transport {
         Self::bind_to(port, false).await
     }
 
-    /// Sets the buffer size of this [Transport].
-    pub fn buffer_size(mut self, size: usize) -> Self {
-        self.buffer_size = size;
-        self
-    }
-
     /// Spin up the [Transport] to handle queueing of requests and responses.
     pub async fn start_server(self) -> (Listener, JoinHandle<()>) {
         let (resp_tx, mut resp_rx) = mpsc::channel(50);
@@ -181,14 +185,14 @@ impl Transport {
                 sender: resp_tx,
             },
             tokio::spawn(async move {
-                let mut buf = [0; Self::MAXIMUM_SIZE];
+                let mut buf = [0; MAXIMUM_SIZE];
                 loop {
                     tokio::select! {
-                        Ok((_, src_addr)) = self.sock.recv_from(&mut buf) => {
-                            req_tx.send((bincode::deserialize::<Request>(&buf[..]).unwrap(), src_addr)).await.expect("channel closed");
+                        Ok((len, src_addr)) = self.sock.recv_from(&mut buf) => {
+                            req_tx.send((encoding::BINCODE_OPTS.deserialize(&buf[..len]).unwrap(), src_addr)).await.expect("channel closed");
                         }
                         Some((resp, src_addr)) = resp_rx.recv() => {
-                            self.sock.send_to(bincode::serialize(&resp).unwrap().as_slice(), src_addr).await;
+                            self.sock.send_to(encoding::BINCODE_OPTS.serialize(&resp).unwrap().as_slice(), src_addr).await.expect("channel closed");
                         }
                     }
                 }
@@ -211,14 +215,15 @@ impl Transport {
                 sender: req_tx,
             },
             tokio::spawn(async move {
-                let mut buf = vec![0; self.buffer_size];
+                let mut buf = vec![0; MAXIMUM_SIZE];
                 loop {
                     tokio::select! {
-                        Ok(_) = self.sock.recv(&mut buf) => {
-                            resp_tx.send(bincode::deserialize(&buf[..]).unwrap()).await.expect("channel closed");
+                        Ok(count) = self.sock.recv(&mut buf) => {
+                            eprintln!("Received {} bytes", &count);
+                            resp_tx.send(encoding::BINCODE_OPTS.deserialize(&buf[..count]).expect("failed to deserialize")).await.expect("channel closed");
                         }
                         Some(req) = req_rx.recv() => {
-                            self.sock.send(bincode::serialize(&req).unwrap().as_slice()).await?;
+                            self.sock.send(encoding::BINCODE_OPTS.serialize(&req).unwrap().as_slice()).await?;
                         }
                     }
                 }

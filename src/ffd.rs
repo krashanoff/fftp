@@ -14,22 +14,12 @@ mod proto;
 
 use proto::*;
 
-static mut BUF_SIZE: usize = 0;
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let matches = App::new("ffd")
         .version("v0.1.0")
         .long_version("v0.1.0 ff@20")
         .args(&[
-            Arg::with_name("buffer-size")
-                .short("b")
-                .long("buffer-size")
-                .default_value("4096")
-                .help(
-                    "Sets the size of the read buffer allocated to each file transfer transaction",
-                )
-                .hidden_short_help(true),
             Arg::with_name("directory")
                 .required(true)
                 .value_name("PATH")
@@ -41,14 +31,6 @@ async fn main() {
                 .help("Port to listen for new connections on"),
         ])
         .get_matches();
-
-    unsafe {
-        BUF_SIZE = matches
-            .value_of("buffer-size")
-            .expect("a buffer size is required")
-            .parse()
-            .expect("buffer size must be numerical");
-    }
 
     let port: u16 = matches
         .value_of("port")
@@ -129,7 +111,7 @@ async fn handle_request(
             };
 
             let mut byte_count = 0u32;
-            let mut buf = unsafe { vec![0; BUF_SIZE] };
+            let mut buf = vec![0; DATA_SIZE];
 
             while let Ok(size) = file.read(&mut buf).await {
                 let last = size == 0;
@@ -153,6 +135,7 @@ async fn handle_request(
                 byte_count += size as u32;
 
                 if last {
+                    eprintln!("Transmission terminated.");
                     break;
                 }
             }
