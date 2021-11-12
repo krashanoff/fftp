@@ -3,7 +3,6 @@
 use std::{fmt::Display, net::SocketAddr, time};
 
 use bincode::{self, Options};
-use igd::aio;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io,
@@ -148,8 +147,8 @@ impl Client {
 }
 
 impl Transport {
-    /// Bind to some port, forwarding with uPNP if requested.
-    async fn bind_to(port: u16, forward: bool) -> Result<Self, Error> {
+    /// Bind to some port.
+    pub async fn bind(port: u16) -> Result<Self, Error> {
         let local_addr = SocketAddr::new("0.0.0.0".parse().unwrap(), port);
 
         let sock = UdpSocket::bind(local_addr).await.unwrap();
@@ -160,24 +159,7 @@ impl Transport {
             }
         };
 
-        if forward {
-            let re = aio::search_gateway(Default::default()).await.unwrap();
-            re.get_any_address(igd::PortMappingProtocol::UDP, local_addr, 0, "ff")
-                .await
-                .expect("failed to acquire forwarded port from gateway");
-        }
-
         Ok(Self { sock })
-    }
-
-    /// Bind to an external port.
-    pub async fn bind_ext(port: u16) -> Result<Self, Error> {
-        Self::bind_to(port, true).await
-    }
-
-    /// Bind to a port, but do **not** attempt to forward with uPNP.
-    pub async fn bind(port: u16) -> Result<Self, Error> {
-        Self::bind_to(port, false).await
     }
 
     /// Spin up the [Transport] to handle queueing of requests and responses.

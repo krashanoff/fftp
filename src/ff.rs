@@ -19,16 +19,9 @@ async fn main() {
     let matches = App::new("ff")
         .version("v0.2.0")
         .long_version("v0.2.0 ff@15")
-        .args(&[
-            Arg::with_name("ext")
-                .short("e")
-                .long("bind-ext")
-                .takes_value(false)
-                .help("Connect from an external IP using UPnP on supported gateways"),
-            Arg::with_name("addr")
-                .required(true)
-                .help("address to connect to"),
-        ])
+        .args(&[Arg::with_name("addr")
+            .required(true)
+            .help("address to connect to")])
         .subcommand(
             SubCommand::with_name("ls")
                 .about("List contents held remotely")
@@ -56,14 +49,9 @@ async fn main() {
         .get_matches();
 
     // Create our transport.
-    let transport = match matches.is_present("ext") {
-        true => Transport::bind_ext(0)
-            .await
-            .expect("failed to bind to external port"),
-        false => Transport::bind(0)
-            .await
-            .expect("failed to bind to internal port"),
-    };
+    let transport = Transport::bind(0)
+        .await
+        .expect("failed to bind to internal port");
 
     let (mut client, _handle) = match transport
         .start_client(matches.value_of("addr").unwrap())
