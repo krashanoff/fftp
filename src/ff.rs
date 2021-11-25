@@ -37,6 +37,7 @@ async fn main() {
         )
         .subcommand(
             SubCommand::with_name("get")
+                .alias("g")
                 .arg(
                     Arg::with_name("path")
                         .value_name("PATH")
@@ -109,17 +110,30 @@ async fn main() {
             }
             eprintln!("Request sent");
 
+            let mut file_len = 0;
+            let mut file_pos_recvd = false;
             let mut file = Cursor::new(vec![]);
-            while let Some(Response::Part {
-                last: false,
-                data,
-                start_byte,
-            }) = client.recv().await
-            {
-                file.set_position(start_byte as u64);
-                if let Err(e) = file.write_all(data.as_slice()).await {
-                    eprintln!("Failed to make a write to disk: {}", e);
-                    exit(1)
+            loop {
+                if file_pos_recvd && file.position() == file_len {
+                    break;
+                }
+
+                match client.recv().await {
+                    Some(Response::Part { data, start_byte }) => {
+                        eprintln!("Received {} bytes", data.len());
+                        file.set_position(start_byte as u64);
+                        if let Err(e) = file.write_all(data.as_slice()).await {
+                            eprintln!("Failed to make a write to disk: {}", e);
+                            exit(1)
+                        }
+                    }
+                    Some(Response::Summary(len)) => {
+                        eprintln!("File is {} bytes long", len);
+                        file_len = len as u64;
+                        file_pos_recvd = true;
+                    }
+                    None => break,
+                    _ => {}
                 }
             }
             stdout.write_all(file.get_ref().as_slice()).await.unwrap();

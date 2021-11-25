@@ -99,11 +99,12 @@ pub enum Response {
     /// Directory listing.
     Directory(Vec<FileData>),
 
+    /// Length of a file.
+    Summary(u32),
+
     /// Part of a file.
     Part {
         start_byte: u32,
-        /// Is this the last chunk of bytes?
-        last: bool,
         data: Vec<u8>,
     },
 
