@@ -197,6 +197,5 @@ fn handle_dgram(args: &mut Args, socket: &mut UdpSocket, data: &[u8], src_addr: 
         Err(e) => {
             eprintln!("{}", e);
         }
-        _ => {}
     }
 }
