@@ -163,7 +163,7 @@ fn handle_dgram(args: &mut Args, socket: &mut UdpSocket, data: &[u8], src_addr: 
         Ok(Request::DownloadPart {
             start_byte: mut pos,
             path,
-            len,
+            ..
         }) => {
             let handle = args.get_file(&path).unwrap();
             while let Ok(amt) = handle.read_at(&mut buf, pos as u64) {

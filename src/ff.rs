@@ -3,19 +3,23 @@
 //! The Fast File client.
 
 use clap::{App, Arg, SubCommand};
-use tokio::{
-    io::{stdout, AsyncWriteExt},
-    time::{timeout, Duration},
-};
+use mio::{net::UdpSocket, Events, Interest, Poll, Token};
 
-use std::{io::Cursor, path::PathBuf, process::exit};
+use std::{
+    io::{stdout, Cursor, Write},
+    path::PathBuf,
+    process::exit,
+    thread::sleep,
+    time::Duration,
+};
 
 mod proto;
 
 use proto::*;
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
+const UDP_SOCKET: Token = Token(0);
+
+fn main() {
     let matches = App::new("ff")
         .version("v0.2.0")
         .long_version("v0.2.0 ff@15")
@@ -50,31 +54,42 @@ async fn main() {
         .get_matches();
 
     // Create our transport.
-    let transport = Transport::bind(0)
-        .await
-        .expect("failed to bind to internal port");
-
-    let (mut client, _handle) = match transport
-        .start_client(matches.value_of("addr").unwrap())
-        .await
-    {
+    let mut sock = match UdpSocket::bind("0.0.0.0".parse().unwrap()) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("{}", e);
             exit(1);
         }
     };
+    sock.connect(
+        matches
+            .value_of("addr")
+            .unwrap()
+            .parse()
+            .expect("valid addr required"),
+    )
+    .expect("valid addr required");
+
+    let poll = match Poll::new() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{}", e);
+            exit(1);
+        }
+    };
+    poll.registry()
+        .register(&mut sock, UDP_SOCKET, Interest::READABLE)
+        .unwrap();
+    let mut events = Events::with_capacity(5);
 
     if let Some(matches) = matches.subcommand_matches("ls") {
         match send_recv_ad_nauseum(
-            &mut client,
+            &mut sock,
             Request::List {
                 path: matches.value_of("path").unwrap().to_string(),
             },
             Duration::from_secs(3),
-        )
-        .await
-        {
+        ) {
             Some(Response::Directory(files)) => {
                 print_filedata(files, matches.is_present("csv"));
                 exit(0)
@@ -95,21 +110,22 @@ async fn main() {
     }
     if let Some(matches) = matches.subcommand_matches("get") {
         let paths = matches.values_of("path").unwrap().map(PathBuf::from);
-        let mut stdout = stdout();
 
         for path in paths {
             eprintln!("Sending request");
-            if let Err(e) = client
-                .send(Request::Download {
+            if let Err(e) = sock.send(
+                bincode::serialize(&Request::Download {
                     path: path.to_str().unwrap().to_string(),
                 })
-                .await
-            {
+                .unwrap()
+                .as_slice(),
+            ) {
                 eprintln!("{}", e);
                 exit(1)
             }
             eprintln!("Request sent");
 
+            let mut buf = [0; proto::MAXIMUM_SIZE];
             let mut file_len = 0;
             let mut file_pos_recvd = false;
             let mut file = Cursor::new(vec![]);
@@ -118,49 +134,64 @@ async fn main() {
                     break;
                 }
 
-                match client.recv().await {
-                    Some(Response::Part { data, start_byte }) => {
-                        eprintln!("Received {} bytes", data.len());
-                        file.set_position(start_byte as u64);
-                        if let Err(e) = file.write_all(data.as_slice()).await {
-                            eprintln!("Failed to make a write to disk: {}", e);
-                            exit(1)
+                match sock.recv(&mut buf) {
+                    Ok(len) => match bincode::deserialize(&buf[..len]) {
+                        Ok(Response::Part { data, start_byte }) => {
+                            eprintln!("Received {} bytes", data.len());
+                            file.set_position(start_byte as u64);
                         }
-                    }
-                    Some(Response::Summary(len)) => {
-                        eprintln!("File is {} bytes long", len);
-                        file_len = len as u64;
-                        file_pos_recvd = true;
-                    }
-                    None => break,
+                        Ok(Response::Summary(len)) => {
+                            eprintln!("File is {} bytes long", len);
+                            file_len = len as u64;
+                            file_pos_recvd = true;
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
-            stdout.write_all(file.get_ref().as_slice()).await.unwrap();
+            stdout().write_all(file.get_ref().as_slice()).unwrap();
         }
     }
 }
 
 /// Send a packet at the given interval until a response is received.
-async fn send_recv_ad_nauseum(
-    client: &mut Client,
+fn send_recv_ad_nauseum(
+    transport: &mut UdpSocket,
     msg: Request,
     duration: Duration,
 ) -> Option<Response> {
+    let mut buf = [0; proto::MAXIMUM_SIZE];
+    let mut poll = Poll::new().unwrap();
+    poll.registry()
+        .register(transport, UDP_SOCKET, Interest::READABLE);
+    let mut events = Events::with_capacity(1);
+    match transport.send(bincode::serialize(&msg).unwrap().as_slice()) {
+        Ok(amt) => {
+            eprintln!("Wrote {} bytes", amt);
+        }
+        Err(e) => {
+            eprintln!("Failed sending request ({}). Trying again...", e);
+        }
+    }
+
+    let mut buf = [0; proto::MAXIMUM_SIZE];
     loop {
-        client.send(msg.clone()).await.expect("channel closed");
-        match timeout(duration, client.recv()).await {
-            Ok(resp) => {
-                return resp;
-            }
-            Err(e) => {
-                eprintln!("Timed out waiting for response ({}). Trying again...", e);
+        poll.poll(&mut events, Some(duration));
+        for event in events.iter() {
+            match event.token() {
+                UDP_SOCKET => {
+                    let amt = transport.recv(&mut buf).unwrap();
+                    return Some(bincode::deserialize(&buf[..amt]).unwrap());
+                }
+                _ => {}
             }
         }
+        sleep(duration);
     }
 }
 
-/// Prints a [Vec<FileData>] nicely.
+/// Prints a [Vec] of [FileData] nicely.
 fn print_filedata(data: Vec<FileData>, csv: bool) {
     if !csv {
         let longest_name = data.iter().fold(20, |acc, data| acc.max(data.path.len()));

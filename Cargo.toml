@@ -24,8 +24,6 @@ structopt = "0.3"
 lazy_static = "1.4"
 clap = { version = "2.33", default-features = false }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "fs", "net", "time", "sync"] }
-igd = { version = "0.12", features = ["aio", "tokio"] }
 mio = { version = "0.8", features = ["os-poll", "net"] }
 
 [profile.release]
