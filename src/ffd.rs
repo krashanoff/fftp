@@ -19,7 +19,7 @@ use structopt::StructOpt;
 
 mod proto;
 
-use proto::{Request, Response, FileData};
+use proto::{FileData, Request, Response};
 
 const UDP_SOCKET: Token = Token(0);
 
