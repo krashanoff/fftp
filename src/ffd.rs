@@ -7,45 +7,40 @@ use std::{
     fs::{read_dir, File, OpenOptions},
     io::{Read, Seek},
     net::SocketAddr,
-    num::ParseIntError,
     os::unix::prelude::FileExt,
     path::PathBuf,
     process::exit,
     time::Duration,
 };
 
+use clap::Parser;
 use mio::{net::UdpSocket, Events, Interest, Poll, Token};
-use structopt::StructOpt;
 
-mod proto;
-
-use proto::{FileData, Request, Response};
+use fftp::{FileData, Request, Response};
 
 const UDP_SOCKET: Token = Token(0);
 
-fn usize_from_str(s: &str) -> Result<usize, ParseIntError> {
-    usize::from_str_radix(s, 10)
-}
-
-#[derive(Debug, StructOpt)]
-#[structopt(name = "ffd", version = "v0.1.1", long_version = "v0.1.1 ff@20")]
+#[derive(Debug, Parser)]
+#[clap(name = "ffd", version, long_version = "ff@20", author)]
 struct Args {
-    #[structopt(skip)]
+    /// Handles for open files in the program
+    #[clap(skip)]
     file_handles: HashMap<PathBuf, File>,
 
-    #[structopt(
-        name = "BYTES",
-        short,
-        long,
-        default_value = "2048",
-        parse(try_from_str = usize_from_str)
-    )]
+    /// Sets the write buffer size for each worker thread in bytes
+    #[clap(value_name = "BYTES", short, long, default_value_t = 2048)]
     buffer_size: usize,
 
-    #[structopt(short, long)]
-    port: u16,
+    /// Size of the worker thread pool
+    #[clap(value_name = "N", short = 'j', long, default_value_t = 4)]
+    threads: usize,
 
-    #[structopt(name = "PATH")]
+    /// Address to serve on
+    #[clap()]
+    addr: SocketAddr,
+
+    /// Path to the directory to make accessible on the given address
+    #[clap(value_name = "PATH")]
     directory: PathBuf,
 }
 
@@ -78,9 +73,7 @@ impl Args {
 }
 
 fn main() {
-    let mut args = Args::from_args();
-
-    let port: u16 = args.port;
+    let mut args = Args::parse();
     args.directory = PathBuf::from(&args.directory).canonicalize().unwrap();
     if !args.directory.exists() || !args.directory.is_dir() {
         eprintln!("Path must be to a directory");
@@ -91,7 +84,7 @@ fn main() {
     let mut poll = Poll::new().expect("failed to create poller");
     let mut events = Events::with_capacity(1024);
     let mut socket = UdpSocket::bind(
-        format!("0.0.0.0:{}", port)
+        format!("0.0.0.0:{}", 8080)
             .parse()
             .expect("valid port number is required"),
     )
@@ -107,7 +100,6 @@ fn main() {
         for event in events.iter() {
             match event.token() {
                 UDP_SOCKET => loop {
-                    eprintln!("New packet readable.");
                     match socket.recv_from(&mut buf) {
                         Ok((len, src_addr)) => {
                             handle_dgram(&mut args, &mut socket, &buf[..len], src_addr)
@@ -181,7 +173,7 @@ fn handle_dgram(args: &mut Args, socket: &mut UdpSocket, data: &[u8], src_addr: 
                 pos += amt as u32;
             }
         }
-        Ok(Request::List { path }) => {
+        Ok(Request::List { path, .. }) => {
             let mut data = vec![];
             for entry in read_dir(args.directory.join(path).clone()).unwrap() {
                 let entry = entry.unwrap();

@@ -2,124 +2,87 @@
 //!
 //! The Fast File client.
 
-use clap::{App, Arg, SubCommand};
+use clap::Parser;
 use mio::{net::UdpSocket, Events, Interest, Poll, Token};
 
 use std::{
     fmt::Display,
     io::{stdout, Cursor, Write},
+    net::SocketAddr,
     path::PathBuf,
     process::exit,
     time::Duration,
 };
 
-mod proto;
-
-use proto::{FileData, Request, Response};
+use fftp::{FileData, Request, Response};
 
 const UDP_SOCKET: Token = Token(0);
 
+/// Client for the Fast File Transport Protocol.
+#[derive(Debug, Parser)]
+#[clap(name = "ff", author, version, long_version = "ff@20")]
+struct Args {
+    /// How to handle directories or files encountered
+    #[clap(value_name = "MODE", possible_values = ["ls", "get"])]
+    mode: String,
+
+    /// Address of the computer you're trying to reach
+    #[clap(value_name = "ADDR")]
+    addr: SocketAddr,
+
+    /// Path of the directory or file to retrieve
+    #[clap(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+}
+
+/// Kill the program with an error message.
 fn die<T: Display>(msg: T) -> ! {
     eprintln!("{}", msg);
     exit(1)
 }
 
 fn main() {
-    let matches = App::new("ff")
-        .version("v0.2.0")
-        .long_version("v0.2.0 ff@15")
-        .args(&[Arg::with_name("addr")
-            .required(true)
-            .help("address to connect to")])
-        .subcommand(
-            SubCommand::with_name("ls")
-                .about("List contents held remotely")
-                .args(&[
-                    Arg::with_name("path")
-                        .default_value(".")
-                        .help("Path of the directory to list"),
-                    Arg::with_name("csv")
-                        .short("c")
-                        .takes_value(false)
-                        .help("Print directory information as a CSV"),
-                ]),
-        )
-        .subcommand(
-            SubCommand::with_name("get")
-                .alias("g")
-                .arg(
-                    Arg::with_name("path")
-                        .value_name("PATH")
-                        .required(true)
-                        .multiple(true)
-                        .help("Path(s) of the file(s) to download"),
-                )
-                .about("Download files"),
-        )
-        .get_matches();
+    let args = Args::parse();
 
-    // Create our transport.
-    let mut sock = match UdpSocket::bind("0.0.0.0:0".parse().unwrap()) {
-        Ok(t) => t,
-        Err(e) => {
-            die(e);
-        }
-    };
-    sock.connect(
-        matches
-            .value_of("addr")
-            .unwrap()
-            .parse()
-            .expect("valid addr required"),
-    )
-    .expect("valid addr required");
+    let mut sock = UdpSocket::bind("0.0.0.0:0".parse().unwrap()).unwrap_or_else(|e| die(e));
+    sock.connect(args.addr).expect("valid addr required");
 
-    let mut poll = match Poll::new() {
-        Ok(p) => p,
-        Err(e) => {
-            die(e);
+    match args.mode.as_str() {
+        "ls" => {
+            match send_recv_ad_nauseum(
+                &mut sock,
+                &Request::List {
+                    path: args.paths.first().unwrap().display().to_string(),
+                    recursive: false,
+                },
+                Duration::from_secs(3),
+            ) {
+                Some(Response::Directory(files)) => {
+                    print_filedata(files, false);
+                    exit(0)
+                }
+                Some(Response::NotAllowed) => {
+                    eprintln!("Not allowed");
+                }
+                None => {
+                    die("Missing response");
+                }
+                _ => {
+                    die("Wrong response");
+                }
+            }
+            exit(0)
         }
-    };
-    poll.registry()
-        .register(&mut sock, UDP_SOCKET, Interest::READABLE)
-        .unwrap();
-    let mut events = Events::with_capacity(5);
-
-    if let Some(matches) = matches.subcommand_matches("ls") {
-        match send_recv_ad_nauseum(
-            &mut sock,
-            &mut poll,
-            &mut events,
-            &Request::List {
-                path: matches.value_of("path").unwrap().to_string(),
-            },
-            Duration::from_secs(3),
-        ) {
-            Some(Response::Directory(files)) => {
-                print_filedata(files, matches.is_present("csv"));
-                exit(0)
-            }
-            Some(Response::NotAllowed) => {
-                eprintln!("Not allowed");
-            }
-            None => {
-                die("Missing response");
-            }
-            _ => {
-                die("Wrong response");
-            }
+        "get" => {
+            get_files(
+                &mut sock,
+                Duration::from_micros(50),
+                args.paths,
+            );
         }
-        exit(0)
-    }
-    if let Some(matches) = matches.subcommand_matches("get") {
-        let paths = matches.values_of("path").unwrap().map(PathBuf::from);
-        get_files(
-            &mut sock,
-            &mut poll,
-            &mut events,
-            Duration::from_micros(50),
-            paths,
-        );
+        _ => {
+            eprintln!("How the hell");
+        }
     }
 }
 
@@ -133,21 +96,13 @@ fn send_msg(transport: &mut UdpSocket, msg: &Request) {
 /// Send a single packet at the given interval until a response is received.
 fn send_recv_ad_nauseum(
     transport: &mut UdpSocket,
-    poll: &mut Poll,
-    events: &mut Events,
     msg: &Request,
     duration: Duration,
 ) -> Option<Response> {
-    let mut buf = [0; proto::MAXIMUM_SIZE];
+    let mut buf = [0; fftp::MAXIMUM_SIZE];
     loop {
-        send_msg(transport, msg);
-        poll.poll(events, Some(duration))
-            .expect("Failed to poll socket");
-        for event in events.iter() {
-            if let UDP_SOCKET = event.token() {
-                let amt = transport.recv(&mut buf).unwrap();
-                return Some(bincode::deserialize(&buf[..amt]).unwrap());
-            }
+        if let Ok((amt, src_addr)) = transport.recv_from(&mut buf) {
+            return Some(bincode::deserialize(&buf[..amt]).unwrap());
         }
     }
 }
@@ -155,9 +110,7 @@ fn send_recv_ad_nauseum(
 /// Receive multiple files.
 fn get_files<T: IntoIterator<Item = PathBuf>>(
     transport: &mut UdpSocket,
-    poll: &mut Poll,
-    events: &mut Events,
-    duration: Duration,
+    _duration: Duration,
     paths: T,
 ) {
     for path in paths {
@@ -171,7 +124,7 @@ fn get_files<T: IntoIterator<Item = PathBuf>>(
             die(e);
         }
 
-        let mut buf = [0; proto::MAXIMUM_SIZE];
+        let mut buf = [0; fftp::MAXIMUM_SIZE];
         let mut file = Cursor::new(vec![]);
         let mut file_len = 0;
         let mut file_pos_recvd = false;
