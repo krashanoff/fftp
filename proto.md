@@ -1,16 +1,16 @@
 # Fast File Transfer Protocol
 
-FFTP is a protocol framework over UDP -- like QUIC, but a little easier to
+FFTP is a toy-protocol framework over UDP -- like QUIC, but a little easier to
 understand. It makes no guarantees about in-order delivery, but does make
 guarantees of data integrity and security between connected parties.
 
 ## Handshake + Security
 
-FFTP uses a one-step handshake process. The initiating host sends a special
+FFTP uses a 1RTT handshake process. The initiating host sends a special
 frame called the [Initiate] frame. This frame contains the initiating host's
 chosen public key for the connection.
 
-The responding host uses this frame to compute their shared private key, then
+The responding host uses this frame to compute their shared session key, then
 replies with another frame, the [First] frame.
 
 The [First] frame is encrypted to the initiating host with their public

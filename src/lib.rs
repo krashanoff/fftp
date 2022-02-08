@@ -1,27 +1,25 @@
 #![doc = include_str!("../proto.md")]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     convert::{TryFrom, TryInto},
     error,
     fmt::Display,
     hash::Hash,
     io,
-    net::{SocketAddr, ToSocketAddrs, UdpSocket},
-    result,
-    time::{self, Duration},
+    net::{SocketAddr, UdpSocket},
+    time,
 };
 
-use bincode::Options;
-use ring::{
-    agreement, digest,
-    rand::{self, SystemRandom},
-};
+use ring::{agreement, digest, rand};
 
-/// Maximum size of a single transport frame.
+/// Maximum size of a single transport frame. This is the maximum size of a UDP
+/// packet.
 pub const MAXIMUM_SIZE: usize = 65535;
 
 /// Possible states of an FFTP connection.
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
 enum State {
     /// No attempt to connect has been made.
     Disconnected,
@@ -118,20 +116,23 @@ where
     }
 
     /// Receive a message from a peer.
-    pub fn recv<D: AsRef<[u8]>>(&mut self) -> Result<(Frame<D>, T::PeerId), Error> {
+    pub fn recv_from<D: AsRef<[u8]> + From<Vec<u8>>>(
+        &mut self,
+    ) -> Result<(Frame<D>, T::PeerId), Error> {
         let mut buf = [0; MAXIMUM_SIZE];
         if let Ok((size, sender)) = self.transport.recv_from(&mut buf) {
-            return Ok((
-                encoding::BINCODE_OPTS.deserialize(&buf[..size]).unwrap(),
-                sender,
-            ));
+            return Ok((Frame::deserialize_from(&buf[..size]).unwrap(), sender));
         }
         Err(Error::UnexpectedType)
     }
 
     /// Send a message to a peer.
-    pub fn send<D: AsRef<[u8]>>(&mut self, r: &Frame<D>, peer: T::PeerId) {
-        todo!()
+    pub fn send<D: AsRef<[u8]> + From<Vec<u8>>>(
+        &mut self,
+        r: &Frame<D>,
+        peer: T::PeerId,
+    ) -> Result<usize, T::Error> {
+        self.transport.send_to(&mut r.serialize(), &peer)
     }
 }
 
@@ -146,22 +147,34 @@ impl<D> Frame<D>
 where
     D: AsRef<[u8]> + TryFrom<Vec<u8>>,
 {
-    fn deserialize(buf: &[u8]) -> Self {
-        let checksum = &buf[buf.len() - digest::SHA256_OUTPUT_LEN..]
+    /// Deserialize a [Frame] from a slice of bytes.
+    fn deserialize_from(buf: &[u8]) -> Result<Self, D::Error> {
+        let checksum: &[u8; digest::SHA256_OUTPUT_LEN] = &buf
+            [buf.len() - digest::SHA256_OUTPUT_LEN..]
             .try_into()
             .unwrap();
-        let data = buf[..buf.len() - digest::SHA256_OUTPUT_LEN]
-            .try_into()
-            .unwrap();
-        Self { data, checksum }
+        let data: D = buf[..buf.len() - digest::SHA256_OUTPUT_LEN]
+            .to_vec()
+            .try_into()?;
+        Ok(Self {
+            data,
+            checksum: checksum.clone(),
+        })
+    }
+
+    /// Serialize a [Frame] into a vector of bytes.
+    fn serialize(&self) -> Vec<u8> {
+        [self.data.as_ref(), self.checksum.as_ref()]
+            .concat()
+            .to_vec()
     }
 }
 
 /// An initiating frame.
-pub type Initiate = Frame<agreement::PublicKey>;
+struct Initiate(agreement::PublicKey);
 
 /// Handshake reply frame. Contains encrypted data.
-pub type First<D> = Frame<(agreement::PublicKey, D)>;
+struct First<D>(agreement::PublicKey, D);
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -195,8 +208,13 @@ impl From<bincode::Error> for Error {
     }
 }
 
-mod files {
+pub mod files {
+    //! An implementation of file transfer on FFTP using requests and responses
+    //! encoded with bincode.
+
     use super::*;
+    use bincode;
+    use serde::{Deserialize, Serialize};
 
     /// Requests that may be sent from a client.
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,13 +241,13 @@ mod files {
 
     impl<'a> From<&'a [u8]> for Request {
         fn from(v: &'a [u8]) -> Self {
-            encoding::BINCODE_OPTS.deserialize(v).unwrap()
+            bincode::deserialize(v).unwrap()
         }
     }
 
     impl Into<Vec<u8>> for Request {
         fn into(self) -> Vec<u8> {
-            encoding::BINCODE_OPTS.serialize(&self).unwrap()
+            bincode::serialize(&self).unwrap()
         }
     }
 
@@ -252,13 +270,13 @@ mod files {
 
     impl<'a> From<&'a [u8]> for Response {
         fn from(v: &'a [u8]) -> Self {
-            encoding::BINCODE_OPTS.deserialize(v).unwrap()
+            bincode::deserialize(v).unwrap()
         }
     }
 
     impl Into<Vec<u8>> for Response {
         fn into(self) -> Vec<u8> {
-            encoding::BINCODE_OPTS.serialize(&self).unwrap()
+            bincode::serialize(&self).unwrap()
         }
     }
 

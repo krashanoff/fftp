@@ -16,7 +16,7 @@ use std::{
 use clap::Parser;
 use mio::{net::UdpSocket, Events, Interest, Poll, Token};
 
-use fftp::{FileData, Request, Response};
+use fftp::files::{FileData, Request, Response};
 
 const UDP_SOCKET: Token = Token(0);
 

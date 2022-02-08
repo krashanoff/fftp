@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use fftp::{FileData, Request, Response};
+use fftp::files::{FileData, Request, Response};
 
 const UDP_SOCKET: Token = Token(0);
 
