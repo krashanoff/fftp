@@ -1,12 +1,12 @@
 CC=gcc
-CFLAGS=-std=c11 -O3
+CFLAGS=-std=c11 -O2
 LDFLAGS=-Isodium/include
 WFLAGS=-Wall -Wextra
 
-ff: ff.o
+ff: src/ff.o
 	$(CC) $(CFLAGS) $(WFLAGS) $(LDFLAGS) -o $@ $^ sodium/lib/libsodium.a
 
-ffd: ffd.o
+ffd: src/ffd.o
 	$(CC) $(CFLAGS) $(WFLAGS) $(LDFLAGS) -o $@ $^ sodium/lib/libsodium.a
 
 %.o: %.c
@@ -14,4 +14,4 @@ ffd: ffd.o
 
 .PHONY: clean
 clean:
-	rm -rf *.o ff ffd
+	rm -rf src/*.o ff ffd

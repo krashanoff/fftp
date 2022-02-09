@@ -7,7 +7,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-#include "sodium/include/sodium.h"
+#include <sodium.h>
 
 #include "common.h"
 

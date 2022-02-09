@@ -10,14 +10,16 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
+#include <sodium.h>
+
 #include "common.h"
-#include "sodium/include/sodium.h"
 
 static struct option options[] = {
   {0, 0, 0, 0}
 };
 
 char buf[MAX_FRAME_SIZE];
+int domain = 0;
 uint32_t port = -1;
 
 static inline
@@ -28,20 +30,25 @@ void die()
 }
 
 void usage(char **argv) {
-  fprintf(stderr, "Usage: %s [-46]\n", argv[0]);
+  fprintf(stderr, "Usage: %s [-46d] [-p PORT]\n", argv[0]);
 }
 
 void parseArgs(int argc, char **argv) {
-  int optidx = 0;
+  int idx = 0;
   char c;
-  while ((c = getopt_long(argc, argv, "46", options, &optidx)) != -1) {
+  while ((c = getopt_long(argc, argv, "46dp:", options, &idx)) != -1) {
     switch (c) {
     case 0:
-      fprintf(stderr, "Got option %s\n", options[optidx].name);
+      fprintf(stderr, "Got option %s\n", options[idx].name);
       break;
     case '4':
+      domain = AF_INET;
       break;
     case '6':
+      domain = AF_INET6;
+      break;
+    case 'p':
+      port = htons(optarg);
       break;
     case '?':
       break;
@@ -49,10 +56,10 @@ void parseArgs(int argc, char **argv) {
       fprintf(stderr, "Got an unknown character\n");
     }
   }
-  
-  if (optidx < argc) {
-    while (optidx < argc) {
-      fprintf(stderr, "%s\n", argv[optidx++]);
+
+  if (optind < argc) {
+    while (optind < argc) {
+      fprintf(stderr, "%s\n", argv[optind++]);
     }
   }
 }
@@ -71,11 +78,19 @@ int main(int argc, char **argv)
   struct sockaddr_in bound, out;
   sodium_memzero(&bound, sizeof(bound));
   bound.sin_family = AF_INET;
-  bound.sin_port = htons(8080);
+  bound.sin_port = port;
   bound.sin_addr.s_addr = htonl(INADDR_ANY);
   if (bind(sockfd, (struct sockaddr *) &bound, (socklen_t) sizeof(bound)) < 0)
     die();
   fprintf(stderr, "Bound to port %d.\n", 8080);
+
+  printf("Testing something...\n");
+  Frame f;
+  buildFrame("test", 5, &f);
+  printf("Created frame...\n");
+
+  Frame f2;
+  parseFrame(&f, sizeof(f), &f2);
 
   struct pollfd socket = {sockfd, POLLOUT | POLLIN | POLLERR | POLLHUP, 0};
   int nfds = 0;
