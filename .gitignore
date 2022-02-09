@@ -1,1 +1,4 @@
-target/
+*.o
+sodium/
+ff
+ffd

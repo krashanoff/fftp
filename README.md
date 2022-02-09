@@ -1,7 +1,8 @@
 # fftp
 
 `fftp` is the "Fast File Transport Protocol". It transfers files quickly between
-computers on a network with low overhead.
+computers on a network with the absolute minimum overhead possible while keeping
+the transaction secure between parties and without destroying data integrity.
 
 ## Motivation
 
@@ -32,3 +33,8 @@ ff MY_LOCAL_IP:8080 get test.txt
 * Minimal communication overhead
 * Fast
 * Maintainable
+
+## Development
+
+All you have to do to build from source is build libsodium to `sodium/` in the
+repo directory.

@@ -1,12 +1,14 @@
 # Fast File Transfer Protocol
 
+This guide uses the libsodium primatives.
+
 FFTP is a toy-protocol framework over UDP -- like QUIC, but a little easier to
 understand. It makes no guarantees about in-order delivery, but does make
 guarantees of data integrity and security between connected parties.
 
 ## Handshake + Security
 
-FFTP uses a 1RTT handshake process. The initiating host sends a special
+FFTP relies on a 1RTT handshake process. The initiating host sends a special
 frame called the [Initiate] frame. This frame contains the initiating host's
 chosen public key for the connection.
 
@@ -19,10 +21,6 @@ public key.
 
 The initiating host and responding host now both have copies of the shared private
 key, allowing them to form their own copy of the session key.
-
-## Data Integrity
-
-Data integrity is achieved by a SHA256 checksum computed in each frame.
 
 ## Serialization
 
