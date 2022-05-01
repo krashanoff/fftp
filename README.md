@@ -1,7 +1,7 @@
 # fftp
 
 `fftp` is the "Fast File Transport Protocol". It transfers files quickly between
-computers on a network with low overhead.
+computers on a network with as little overhead as possible.
 
 ## Motivation
 
@@ -32,3 +32,11 @@ ff MY_LOCAL_IP:8080 get test.txt
 * Minimal communication overhead
 * Fast
 * Maintainable
+
+## Proto
+
+There is only one version of the FFTP application-layer protocol.
+
+* First byte is metadata for the packet.
+* Second byte of the packet is data.
+* Last few bytes are a checksum of the entire packet (with the checksum zeroed).
