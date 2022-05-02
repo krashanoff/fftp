@@ -7,35 +7,52 @@
 
 #include <string.h>
 #include <errno.h>
+#include <syslog.h>
+#include <signal.h>
 
 #include <poll.h>
 
-#include <stdio.h>
-
 void die();
 void *generateResponse(const char *);
+void handleSigint(int);
 
-int main(int argc, char **argv)
+// Options.
+char *logPath = NULL;
+uint16_t port = 0;
+
+int main(int argc, char * const *argv)
 {
+  setlogmask(LOG_UPTO(LOG_INFO));
+  openlog(argv[0], LOG_CONS | LOG_PID | LOG_NDELAY | LOG_PERROR, LOG_USER);
+
   int c = 0;
-  while ((c = getopt(argc, argv, "46vdC:p:")) > 0)
+  while ((c = getopt(argc, argv, "46dC:p:")) > 0)
   {
     switch (c)
     {
     case '4':
     case '6':
-    case 'v':
+      break;
     case 'd':
-      printf("hmm\n");
+      syslog(LOG_INFO, "daemonizing");
       break;
     case 'C':
-      printf("set directory to %s\n", optarg);
+      if (chdir(optarg) < 0)
+        die();
+      syslog(LOG_INFO, "set directory to %s", optarg);
+      break;
+    case 'p':
+      if ((port = atoi(optarg)) < 0)
+        die();
       break;
     default:
-      printf("Unknown\n");
+      syslog(LOG_INFO, "unknown argument passed");
       break;
     }
   }
+
+  // Register signals.
+  signal(SIGINT, handleSigint);
 
   // Initialize socket.
   int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -43,7 +60,7 @@ int main(int argc, char **argv)
   struct sockaddr_in addr;
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(8080);
+  addr.sin_port = htons(port);
   socklen_t addrlen = sizeof(addr);
   bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 
@@ -53,6 +70,8 @@ int main(int argc, char **argv)
   struct pollfd fds[] = {
       {fd, POLLIN | POLLHUP | POLLERR, 0},
   };
+
+  syslog(LOG_INFO, "Started logging at port %d", port);
   while (poll(fds, 1, -1) >= 0)
   {
     if (fds[0].revents & POLLIN)
@@ -63,11 +82,11 @@ int main(int argc, char **argv)
 
       uint8_t meta = recvbuf[0];
       char *data = recvbuf + 1;
-      printf("Packet len is %d, meta is %d, data is %s\n", len, meta, data);
+      syslog(LOG_INFO, "Packet meta is %d, data is %s", meta, data);
 
-      printf("Reply to %d\n", addr.sin_port);
+      syslog(LOG_INFO, "Reply to %d\n", addr.sin_port);
       memcpy(recvbuf, "STOP", 5);
-      fprintf(stderr, "Sent response %d.\n", sendto(fd, recvbuf, 5, 0, (struct sockaddr *)&addr, &addrlen));
+      syslog(LOG_INFO, "Sent response %zd.\n", sendto(fd, recvbuf, 5, 0, (struct sockaddr *)&addr, addrlen));
     }
   }
   return 0;
@@ -75,6 +94,16 @@ int main(int argc, char **argv)
 
 void die()
 {
-  fprintf(stderr, "%s\n", strerror(errno));
+  syslog(LOG_ERR, "%s", strerror(errno));
   exit(EXIT_FAILURE);
+}
+
+void handleSigint(int sigNum)
+{
+  switch (sigNum) {
+  case SIGINT:
+    break;
+  }
+  closelog();
+  exit(EXIT_SUCCESS);
 }

@@ -12,7 +12,7 @@
 
 #include <stdio.h>
 
-uint8_t port = -1;
+uint16_t port = -1;
 
 int main(int argc, char **argv)
 {
@@ -25,7 +25,8 @@ int main(int argc, char **argv)
     case '6':
       break;
     case 'p':
-      if ((port = atoi(optarg)) < 0) {
+      if ((port = atoi(optarg)) < 0)
+      {
         perror(strerror(errno));
         exit(EXIT_FAILURE);
       }
@@ -39,7 +40,7 @@ int main(int argc, char **argv)
   struct sockaddr_in addr;
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(8081);
+  addr.sin_port = htons(port);
   socklen_t addrlen = sizeof(addr);
   bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 
@@ -59,7 +60,8 @@ int main(int argc, char **argv)
 
     if (fds[0].revents & POLLOUT)
     {
-      recvd = sendto(fd, "testing", 8, 0, (struct sockaddr *)&addr, addrlen);
+      memcpy(sendbuf, "testing", 8);
+      recvd = sendto(fd, sendbuf, 8, 0, (struct sockaddr *)&addr, addrlen);
       printf("Thing %zd on port %d\n", recvd, addr.sin_port);
     }
   }
