@@ -1,0 +1,32 @@
+[package]
+name = "fftp"
+description = "In-network file transfer."
+version = "0.2.0"
+authors = ["krashanoff <leo@krashanoff.com>"]
+edition = "2018"
+readme = "README.md"
+repository = "https://github.com/krashanoff/fftp"
+license = "MIT"
+keywords = ["file", "transfer", "udp", "ftp"]
+categories = ["command-line-utilities", "encoding", "filesystem"]
+
+[[bin]]
+name = "ffd"
+path = "src/ffd.rs"
+
+[[bin]]
+name = "ff"
+path = "src/ff.rs"
+
+[dependencies]
+bincode = "1.3"
+lazy_static = "1.4"
+clap = { version = "2.33", default-features = false }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "fs", "net", "time", "sync"] }
+
+[profile.release]
+codegen-units = 1
+opt-level = 3
+lto = "fat"
+panic = "abort"
