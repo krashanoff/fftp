@@ -19,10 +19,10 @@ mkdir test
 echo "hi" > test/test.txt
 
 # Start running a server.
-ffd MY_LOCAL_IP:8080 test &
+ffd 127.0.0.1 8080 test &
 
 # List files available.
-ff MY_LOCAL_IP:8080 ls
+ff 127.0.0.1 8080 ls
 
 # Download a file.
 ff MY_LOCAL_IP:8080 get test.txt
@@ -32,3 +32,27 @@ ff MY_LOCAL_IP:8080 get test.txt
 * Minimal communication overhead
 * Fast
 * Maintainable
+
+## Protocol Details
+
+It's fast and it's simple.
+
+* Nonblocking
+* Stateless
+* Insecure
+
+Request:
+* 2 byte length of the packet
+* 1 byte request/response packet
+  * Higher 4 bits are used for request/response type
+  * Lower 4 bits are used for request/response tagging
+* 2 byte requested buffer size
+  * Server will send packets of maximum size `min(server_buffer_size, requested_buffer_size)`.
+* Args (maximum length of `255 * 4` bytes)
+
+Response:
+* 2 byte length of the packet
+* 1 byte request/response packet
+  * Higher 4 bits are used for request/response type
+  * Lower 4 bits are used for request/response tagging
+* Variable-length data
