@@ -36,10 +36,17 @@ ff MY_LOCAL_IP:8080 get test.txt
 ## Protocol Details
 
 It's fast and it's simple.
-
 * Nonblocking
 * Stateless
 * Insecure
+
+### V0
+
+V0 was implemented in Rust and used `bincode` for sending data.
+
+### V1
+
+V1 transitioned the program to C. It simplified the protocol at expense of implementation complexity.
 
 Request:
 * 2 byte length of the packet

@@ -67,38 +67,51 @@ int main(int argc, char *const *argv)
   // Send initiation packets for each path
   for (int k = 4; k < argc; k++)
   {
-    recv_buf[0] = 0xD0;
-    recv_buf[1] = 0xDF;
-    recv_buf[2] = (4 << 4) | 6;
-    recv_buf[3] = '\0';
+    recv_buf[0] = 0x00;
+    recv_buf[1] = 0x03;
+    recv_buf[2] = (REQUEST_LS << 4) | 6;
 
     fprintf(stderr, "sending packet with len %x, type %d, tag %d\n", 0xD0DF, 4, 6);
 
-    if (sendto(fd, recv_buf, 4 * sizeof(char), 0, &saddr, sizeof(saddr)) < 0)
+    if (sendto(fd, recv_buf, 3 * sizeof(char), 0, &saddr, sizeof(saddr)) < 0)
     {
       die(EXIT_FAILURE, "failed to send packet");
     }
     fprintf(stderr, "sent one packet for %s", argv[k]);
   }
 
+  int timeouts = 0;
+
   struct sockaddr_in sender = {0};
   socklen_t sender_size = sizeof(sender);
   struct pollfd fds[] = {
       {fd, POLLIN | POLLHUP, 0},
   };
-  while (poll(fds, 1, -1) > 0)
+  while (poll(fds, 1, 1000) >= 0)
   {
+    timeouts++;
+
     if ((fds[0].revents & POLLHUP) || (fds[0].revents & POLLERR))
     {
       die(POLL_ERR, "failed while polling");
     }
     if (fds[0].revents & POLLIN)
     {
+      timeouts = 0;
+
       int rc = 0;
       while ((rc = recvfrom(fd, &recv_buf, sizeof(recv_buf), 0, &sender, &sender_size)) > 0)
       {
         // recv file chunk
         fprintf(stderr, "received %d bytes\n", rc);
+      }
+    }
+
+    if (timeouts > 0) {
+      fprintf(stderr, "timed out %d times\n", timeouts);
+      if (timeouts > 4) {
+        fprintf(stderr, "no response received in timeout limit, exiting\n");
+        exit(EXIT_FAILURE);
       }
     }
   }

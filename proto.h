@@ -3,14 +3,16 @@
 
 #include <stdlib.h>
 
-#define REQUEST_LS      ('L')     /* list a whole directory */
-#define REQUEST_ENTRY   ('E')     /* list one part of the directory */
-#define REQUEST_CHUNK   ('C')     /* get a chunk of a file */
-#define REQUEST_GET     ('G')     /* get the whole file */
+/* There's only 30 possible values for requests and responses. */
+#define REQUEST_LS      ((uint8_t) (1))     /* list a whole directory */
+#define REQUEST_ENTRY   ((uint8_t) (2))     /* list one part of the directory */
+#define REQUEST_CHUNK   ((uint8_t) (3))     /* get a chunk of a file */
+#define REQUEST_GET     ((uint8_t) (4))     /* get the whole file */
 
-#define RESPONSE_LS     ('d')     /* entry in a directory */
-#define RESPONSE_CHUNK  ('c')     /* chunk in a file */
-#define RESPONSE_TERM   ('t')     /* terminal chunk in a file */
+#define RESPONSE_LS     ((uint8_t) (15))     /* entry in a directory */
+#define RESPONSE_CHUNK  ((uint8_t) (16))     /* chunk in a file */
+#define RESPONSE_TERM   ((uint8_t) (17))     /* terminal chunk in a file */
+#define RESPONSE_ERR    ((uint8_t) (18))     /* error */
 
 struct request_t {
   uint8_t tag;
